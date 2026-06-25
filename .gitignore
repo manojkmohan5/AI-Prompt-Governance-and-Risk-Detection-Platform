@@ -1,0 +1,38 @@
+# Environment – never commit real keys
+.env
+backend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.env*
+
+# Data / models
+data/
+*.faiss
+*.pkl
+_bert_finetuned/
+
+# Database
+governance.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Office temp files
+~$*
+
+# Vite cache
+frontend/.vite/
