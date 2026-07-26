@@ -6,15 +6,23 @@ Guidance for Claude Code when working inside `backend/`. See the [root CLAUDE.md
 
 ```bash
 python -m venv venv && source venv/bin/activate   # macOS/Linux
-pip install -r requirements.txt                     # core deps
-pip install -r requirements-ml.txt                   # optional: needed for Knowledge Shield (FAISS + embeddings)
+pip install -r requirements.txt -r requirements-ml.txt   # both required — see note below
 cp ../.env.example .env                              # then set GROQ_API_KEY
 
 uvicorn main:app --host 0.0.0.0 --port 8001          # run API (fine-tunes DistilBERT on first run, ~3 min on CPU; cached after in app/governance/_bert_finetuned/)
 python -m seed_data.seed                             # seed demo users, policies, prompt history, protected docs
 ```
 
-There is no test suite in this repo (no pytest config, no test files) and no linter config for the backend.
+`requirements-ml.txt`'s own comment says it's "optional, needed for Knowledge Shield" — that's misleading. `app/governance/ml_classifier.py` imports `torch`/`transformers` directly (lazily, inside functions) and `main.py`'s startup lifespan always calls `ml_classifier.initialize()` unconditionally, so the app won't actually start without those packages. Only `sentence-transformers`/`faiss-cpu` (Knowledge Shield specifically) are genuinely optional.
+
+```bash
+cd backend && pytest -v   # small suite in tests/, currently covers app/core/cache.py
+```
+No linter is configured for the backend.
+
+### Docker
+
+`docker-compose.yml` (repo root) runs backend + frontend + Redis together — `docker compose up --build`. `backend/Dockerfile` fine-tunes the classifier *at image build time* (see the layering comments in the Dockerfile) so containers start in seconds rather than retraining on every boot; only `app/governance/ml_classifier.py` is copied in before that RUN step so unrelated code changes don't invalidate the expensive layer. Torch is installed from `https://download.pytorch.org/whl/cpu` explicitly — the default PyPI wheel for linux/aarch64 pulls in ~1.5GB of unused NVIDIA/CUDA packages otherwise.
 
 ## Architecture
 

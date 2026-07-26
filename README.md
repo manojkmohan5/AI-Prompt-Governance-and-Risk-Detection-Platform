@@ -49,6 +49,8 @@ User ──► Frontend (React/Vite :5173)
 | Vector Search | FAISS (`faiss-cpu`) |
 | LLM Provider | Groq API (`llama-3.3-70b-versatile`) |
 | Auth | JWT (python-jose + bcrypt) |
+| Cache | Redis (optional — classifier + Knowledge Shield results) |
+| Deployment | Docker + Docker Compose (backend, frontend/nginx, Redis) |
 
 ---
 
@@ -66,17 +68,23 @@ Mini Enquino/
 │   │   ├── schemas/             # Pydantic request/response schemas
 │   │   └── services/            # prompt_service, analytics_service, llm_service, anomaly_service
 │   ├── seed_data/seed.py        # Demo users, prompt history, policy rules, protected docs
+│   ├── tests/                   # pytest suite (app/core/cache.py)
 │   ├── main.py                  # FastAPI app entry point
+│   ├── Dockerfile               # Bakes the DistilBERT fine-tune into the image build
 │   ├── requirements.txt         # Core dependencies
-│   └── requirements-ml.txt      # PyTorch + Transformers + FAISS
+│   └── requirements-ml.txt      # PyTorch + Transformers + FAISS (not fully optional — see backend/CLAUDE.md)
 ├── frontend/
-│   └── src/
-│       ├── pages/               # Login, Dashboard, PromptConsole, AuditLogs, Analytics...
-│       ├── components/          # RiskBadge, MetricCard
-│       ├── context/             # AuthContext (JWT)
-│       ├── services/api.ts      # Axios API client
-│       ├── layouts/             # DashboardLayout (sidebar nav)
-│       └── types/               # TypeScript interfaces
+│   ├── src/
+│   │   ├── pages/               # Login, Dashboard, PromptConsole, AuditLogs, Analytics...
+│   │   ├── components/          # RiskBadge, MetricCard
+│   │   ├── context/             # AuthContext (JWT)
+│   │   ├── services/api.ts      # Axios API client
+│   │   ├── layouts/             # DashboardLayout (sidebar nav)
+│   │   └── types/               # TypeScript interfaces
+│   ├── Dockerfile               # Multi-stage build -> nginx
+│   └── nginx.conf               # Serves the SPA, proxies /api to the backend
+├── .github/workflows/ci.yml     # Backend + frontend checks, Docker build + smoke test
+├── docker-compose.yml           # Full stack: backend + frontend + Redis
 ├── .env.example                 # Environment variable template
 └── README.md
 ```
@@ -124,6 +132,15 @@ npm install
 npm run dev
 # App: http://localhost:5173
 ```
+
+### Docker (alternative to the above)
+
+```bash
+docker compose up --build
+# Frontend: http://localhost   Backend: http://localhost:8001
+```
+
+Runs backend + frontend (nginx) + Redis together. The backend image fine-tunes DistilBERT at *build* time, so containers start in seconds instead of retraining on every boot. Set `GROQ_API_KEY` (and optionally `SECRET_KEY`) in a `.env` file at the repo root before running — `docker-compose.yml` reads it via variable substitution.
 
 ---
 
@@ -192,6 +209,9 @@ Interactive docs: `http://localhost:8001/docs`
 | `RISK_WARN_THRESHOLD` | Score above which WARN applies (default: 50) |
 | `KNOWLEDGE_SHIELD_THRESHOLD` | Cosine similarity trigger (default: 0.75) |
 | `EMBEDDING_MODEL` | SentenceTransformers model (default: `all-MiniLM-L6-v2`) |
+| `REDIS_URL` | Optional cache for the classifier + Knowledge Shield (default: `redis://localhost:6379/0`); both degrade to running uncached if unreachable |
+| `CACHE_ENABLED` | Set `false` to disable the Redis cache outright (default: `true`) |
+| `CACHE_TTL_SECONDS` | Cache entry lifetime (default: 604800 / 7 days) |
 
 ---
 
@@ -203,4 +223,3 @@ Interactive docs: `http://localhost:8001/docs`
 - [ ] CSV / PDF compliance report export
 - [ ] Slack / PagerDuty alerting on CRITICAL events
 - [ ] Rate limiting per user and department
-- [ ] Docker deployment configuration
