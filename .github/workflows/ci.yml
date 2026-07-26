@@ -13,6 +13,16 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -20,10 +30,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
 
-      - name: Install core dependencies
-        run: pip install -r requirements.txt
+      - name: Install core + dev dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
         # requirements-ml.txt (torch/transformers/faiss) is intentionally not
         # installed here — it's a large, slow install and app.governance.ml_classifier
         # only imports those packages lazily inside functions, so this check
@@ -34,6 +46,9 @@ jobs:
 
       - name: Import check (catches broken imports / route wiring)
         run: python -c "import main"
+
+      - name: Test cache layer (real Redis service, default REDIS_URL matches it)
+        run: pytest -v
 
   frontend:
     name: Frontend (Vite build)
@@ -55,3 +70,68 @@ jobs:
 
       - name: Build (tsc -b && vite build)
         run: npm run build
+
+  docker-build:
+    name: Docker build + smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image (includes the DistilBERT fine-tune layer)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          load: true
+          tags: governance-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          load: true
+          tags: governance-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Smoke test the built images
+        run: |
+          set -e
+          docker network create governance-ci-net
+
+          docker run -d --name redis --network governance-ci-net redis:7-alpine
+          docker run -d --name backend --network governance-ci-net \
+            -e REDIS_URL=redis://redis:6379/0 \
+            -p 8001:8001 governance-backend:ci
+
+          echo "waiting for backend health..."
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:8001/health && break
+            sleep 2
+          done
+          curl -sf http://localhost:8001/health
+
+          docker run -d --name frontend --network governance-ci-net \
+            -p 8080:80 governance-frontend:ci
+
+          echo "waiting for frontend..."
+          for _ in $(seq 1 20); do
+            curl -sf http://localhost:8080/ >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:8080/ | grep -qi "<!doctype html" \
+            || (echo "frontend did not serve index.html" && exit 1)
+
+          echo "verifying nginx's /api proxy actually reaches the backend..."
+          curl -sf http://localhost:8080/api/docs >/dev/null \
+            || (echo "frontend -> backend /api reverse proxy did not work" && exit 1)
+
+      - name: Show container logs on failure
+        if: failure()
+        run: |
+          docker logs backend || true
+          docker logs frontend || true
+          docker logs redis || true

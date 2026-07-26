@@ -10,6 +10,6 @@ This is a two-package repo: `backend/` (FastAPI + SQLAlchemy + the ML governance
 
 ## Cross-cutting notes
 
-- **No automated tests anywhere in this repo** — no pytest config/test files in `backend/`, no test runner configured in `frontend/`. `npm run build` (`tsc -b`) is the only automated check on the frontend side.
-- **Known port mismatch**: `frontend/vite.config.ts` proxies `/api` to `http://localhost:8000`, but the README and the documented `uvicorn` command both use port `8001`. Check which port the backend is actually running on before assuming the proxy works — align one or the other rather than guessing.
+- **Testing**: `backend/tests/` has a small pytest suite (currently covering `app/core/cache.py`); no frontend test runner exists — `npm run build` (`tsc -b`) is the only automated check on that side. CI (`.github/workflows/ci.yml`) runs both, plus a Docker build + smoke test job.
+- **Docker**: `docker-compose.yml` at the repo root runs the full stack (backend, frontend via nginx, Redis) — `docker compose up --build`. The backend image bakes the DistilBERT fine-tune into the build layer (see `backend/Dockerfile`) so containers start in seconds instead of retraining on every boot. See [backend/CLAUDE.md](backend/CLAUDE.md) for details on that layering and why torch is installed from the CPU-only index.
 - **Accessibility**: all web UI code (`frontend/src`) must meet WCAG 2.1 AA. See [frontend/CLAUDE.md](frontend/CLAUDE.md) for specifics.

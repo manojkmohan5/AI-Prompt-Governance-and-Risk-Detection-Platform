@@ -1,0 +1,13 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+_bert_finetuned/
+governance.db
+.env
+data/
+.pytest_cache/
+tests/
+conftest.py
+pytest.ini
+requirements-dev.txt

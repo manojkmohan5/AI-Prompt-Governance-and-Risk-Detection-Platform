@@ -8,6 +8,7 @@ Architecture:
 First run: downloads distilbert-base-uncased (~268 MB) and fine-tunes for ~3 min on CPU.
 Subsequent runs: loads fine-tuned weights from _bert_finetuned/ in < 2 seconds.
 """
+import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -510,6 +511,15 @@ def classify(text: str) -> Dict[str, float]:
     if _model is None:
         initialize()
 
+    from app.core import cache
+    key = cache.build_key("classify", text, cache.classifier_fingerprint())
+    cached = cache.cache_get(key)
+    if cached is not None:
+        try:
+            return json.loads(cached)
+        except (json.JSONDecodeError, TypeError):
+            pass  # corrupt cache entry — fall through and recompute
+
     import torch
 
     enc = _tokenizer(
@@ -523,7 +533,9 @@ def classify(text: str) -> Dict[str, float]:
         ).logits
         probs = torch.sigmoid(logits).squeeze(0).tolist()
 
-    return {cat: round(float(p), 4) for cat, p in zip(CATEGORIES, probs)}
+    result = {cat: round(float(p), 4) for cat, p in zip(CATEGORIES, probs)}
+    cache.cache_set(key, json.dumps(result))
+    return result
 
 
 def top_category(scores: Dict[str, float]) -> Tuple[Optional[str], float]:

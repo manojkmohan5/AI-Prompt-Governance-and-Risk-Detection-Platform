@@ -1,6 +1,13 @@
-# Optional ML dependencies – needed for Knowledge Shield (FAISS + embeddings)
-# Install with: pip install -r requirements-ml.txt
-# The platform runs fine without these; Knowledge Shield will show as "inactive"
+# ML dependencies. Install with: pip install -r requirements-ml.txt
+#
+# NOT fully optional despite the filename: sentence-transformers pulls in
+# torch + transformers as its own dependencies, and app/governance/ml_classifier.py
+# (the core governance classifier, used on every single prompt) needs those
+# two packages unconditionally — main.py's startup lifespan always calls
+# ml_classifier.initialize(), so the app won't actually start without this
+# file installed. Only faiss-cpu/scikit-learn (Knowledge Shield specifically)
+# are genuinely optional — Knowledge Shield alone degrades to "inactive"
+# if the encoder is unavailable.
 sentence-transformers==3.3.0
 scikit-learn==1.5.2
 faiss-cpu==1.9.0
