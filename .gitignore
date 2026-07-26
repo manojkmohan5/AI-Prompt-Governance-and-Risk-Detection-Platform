@@ -36,3 +36,4 @@ governance.db
 
 # Vite cache
 frontend/.vite/
+*.tsbuildinfo
