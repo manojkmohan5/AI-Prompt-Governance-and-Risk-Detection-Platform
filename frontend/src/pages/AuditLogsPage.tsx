@@ -82,7 +82,10 @@ export default function AuditLogsPage() {
                   </td>
                 </tr>
               )}
-              {data?.items.map((log) => (
+              {data?.items.map((log) => {
+                const policyAction = log.event_data?.policy_action as string | undefined
+                const flags = log.event_data?.flags as string[] | undefined
+                return (
                 <>
                   <tr
                     key={log.id}
@@ -110,12 +113,12 @@ export default function AuditLogsPage() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {log.event_data?.policy_action && (
+                      {policyAction && (
                         <span className={`text-xs font-mono font-bold ${
-                          log.event_data.policy_action === 'BLOCK' ? 'text-red-400' :
-                          log.event_data.policy_action === 'WARN' ? 'text-yellow-400' :
-                          log.event_data.policy_action === 'REDACT' ? 'text-blue-400' : 'text-green-400'
-                        }`}>{String(log.event_data.policy_action)}</span>
+                          policyAction === 'BLOCK' ? 'text-red-400' :
+                          policyAction === 'WARN' ? 'text-yellow-400' :
+                          policyAction === 'REDACT' ? 'text-blue-400' : 'text-green-400'
+                        }`}>{policyAction}</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-gray-600 text-xs">{log.id.slice(0, 8)}</td>
@@ -134,11 +137,11 @@ export default function AuditLogsPage() {
                               <p className="text-gray-300 font-mono">{log.prompt_id}</p>
                             </div>
                           )}
-                          {log.event_data?.flags && (Array.isArray(log.event_data.flags) && log.event_data.flags.length > 0) && (
+                          {flags && flags.length > 0 && (
                             <div className="col-span-2">
                               <p className="section-title mb-1">Flags</p>
                               <div className="flex gap-2 flex-wrap">
-                                {(log.event_data.flags as string[]).map((f: string) => (
+                                {flags.map((f) => (
                                   <span key={f} className="badge bg-surface-3 text-gray-300 font-mono">{f}</span>
                                 ))}
                               </div>
@@ -149,7 +152,7 @@ export default function AuditLogsPage() {
                     </tr>
                   )}
                 </>
-              ))}
+              )})}
             </tbody>
           </table>
         </div>
