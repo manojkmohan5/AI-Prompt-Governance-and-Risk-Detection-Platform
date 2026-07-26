@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     FAISS_INDEX_PATH: str = "data/faiss_index"
 
+    # Redis cache for the ML classifier + Knowledge Shield similarity search —
+    # both run a transformer forward pass per call. Optional: if REDIS_URL is
+    # unreachable or the redis package isn't installed, both fall back to
+    # running uncached rather than failing.
+    REDIS_URL: str = "redis://localhost:6379/0"
+    CACHE_ENABLED: bool = True
+    CACHE_TTL_SECONDS: int = 60 * 60 * 24 * 7  # 7 days
+
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
     @property

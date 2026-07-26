@@ -37,3 +37,6 @@ governance.db
 # Vite cache
 frontend/.vite/
 *.tsbuildinfo
+
+# Redis local snapshot (created by a local redis-server during dev/testing)
+dump.rdb
