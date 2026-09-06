@@ -60,4 +60,7 @@ async def shield_status(_=Depends(require_admin)):
         "encoder_available": encoder.is_available(),
         "index_ready": knowledge_shield._faiss_index is not None,
         "initialized": knowledge_shield._initialized,
+        # How much of each document is actually protected. ner_enabled False
+        # means names were not indexed and only identifiers are covered.
+        **knowledge_shield.index_stats(),
     }

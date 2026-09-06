@@ -1,7 +1,7 @@
 """
 Tests for app/core/cache.py — the optional Redis cache for the classifier
 and Knowledge Shield. Deliberately doesn't import torch/transformers (ML
-deps aren't installed in CI); classifier_fingerprint() and
+deps aren't installed in CI); and
 knowledge_shield_fingerprint() only touch a file path / a module attribute,
 so they're safe to exercise without a trained model.
 """
@@ -56,13 +56,6 @@ def test_cache_degrades_gracefully_when_redis_unreachable(monkeypatch):
     key = cache.build_key("test", "should-not-crash", "fp")
     cache.cache_set(key, "value")  # must not raise
     assert cache.cache_get(key) is None  # must not raise
-
-
-def test_classifier_fingerprint_returns_nonempty_string():
-    # No fine-tuned model in CI (ML deps intentionally excluded) — this
-    # should return the "untrained" sentinel, not raise.
-    fp = cache.classifier_fingerprint()
-    assert isinstance(fp, str) and len(fp) > 0
 
 
 def test_knowledge_shield_fingerprint_returns_nonempty_string():

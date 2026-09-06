@@ -77,7 +77,7 @@ POLICIES = [
         "name": "Block Knowledge Shield Matches",
         "description": "Block prompts that match confidential document embeddings.",
         "condition_type": ConditionType.FLAG_CONTAINS,
-        "condition_value": "KNOWLEDGE_SHIELD",
+        "condition_value": "CONFIDENTIAL_DOC_LEAK",
         "action": ActionType.BLOCK,
         "priority": 90,
     },
@@ -108,6 +108,152 @@ POLICIES = [
 ]
 
 CONFIDENTIAL_DOCS = [
+    # ── Client and customer records ─────────────────────────────────
+    # Everything below is FICTIONAL test data - invented people, companies,
+    # identifiers and card numbers. Nothing here belongs to a real person.
+    #
+    # These exist to exercise the Knowledge Shield entity index, so unlike the
+    # policy documents further down they are deliberately dense with extractable
+    # values: SSNs, contract and case numbers, effective dates, amounts. The card
+    # numbers are Luhn-valid on purpose - entities.py rejects digit runs that fail
+    # the checksum, so placeholder digits would silently never be indexed.
+    #
+    # Names and identifiers recur across documents by design (Dana Reyes appears in
+    # the client record, the payment vault and the escalation log) so cross-document
+    # matching can be tested, not just single-document hits.
+    {
+        "name": 'Client Master Record - Northwind Retail Group',
+        "category": 'client',
+        "content": (
+            'CONFIDENTIAL CLIENT RECORD. Northwind Retail Group. Primary contact: Dana Reyes, VP '
+            'Operations. Email dana.reyes@northwindretail.com, direct line 555-247-8891. Billing '
+            'contact: Marcus Feld, marcus.feld@northwindretail.com, 555-247-8830. Contract number '
+            'NW-2024-8871, effective 2024-03-01, renews 2027-02-28. Annual contract value $1,450,000, '
+            'billed quarterly. Payment terms net 45. Account number 7742-9930-1185. Assigned CSM: '
+            'Priya Raghavan. Escalation path: named-account SLA, 1 hour response, 99.95% uptime '
+            'commitment. Do not share commercial terms outside the account team.'
+        ),
+    },
+    {
+        "name": 'Employee File - Priya Raghavan (Engineering)',
+        "category": 'hr',
+        "content": (
+            'CONFIDENTIAL HR FILE - RESTRICTED ACCESS. Employee: Priya Raghavan. Employee ID '
+            'EMP-40921. SSN 492-83-7291. Date of birth 1989-11-04. Contact priya.raghavan@acme.corp, '
+            'mobile 555-882-4417. Role: Staff Engineer, Platform. Start date 2021-06-14. Base salary '
+            '$185,000, target bonus 15%, equity refresh 2,400 RSUs vesting 2025-04-01. Emergency '
+            'contact: Anil Raghavan, 555-882-4402. Bank on file for payroll: IBAN '
+            'GB29NWBK60161331926819. 2025 performance rating: exceeds expectations. Flagged for '
+            'promotion review Q2 2026.'
+        ),
+    },
+    {
+        "name": 'Patient Health Record - Case PT-88231',
+        "category": 'healthcare',
+        "content": (
+            'PROTECTED HEALTH INFORMATION - HIPAA RESTRICTED. Patient ID PT-88231. Patient: Elena '
+            'Marchetti. Date of birth 1976-02-19. SSN 318-44-2205. Contact '
+            'elena.marchetti@mailbox.example, 555-410-7723. Admission 2025-08-12, discharge '
+            '2025-08-19. Attending: Dr. Samuel Okafor. Primary diagnosis: post-operative recovery, '
+            'elective cardiac procedure. Insurance member number MBR-5540912, claim number CLM-99823, '
+            'billed $47,320. Follow-up scheduled 2025-09-30. Disclosure of any element of this record '
+            'outside the care team is a HIPAA violation.'
+        ),
+    },
+    {
+        "name": 'Customer Payment Instruments - Vault Export',
+        "category": 'financial',
+        "content": (
+            'PCI-RESTRICTED - CARDHOLDER DATA. Quarterly vault export, finance reconciliation only. '
+            'Customer 1: Northwind Retail Group, card 4532 5260 1815 9080, expiry 11/27, billing '
+            'contact marcus.feld@northwindretail.com. Customer 2: Kestrel Logistics Ltd, card 5412 '
+            '9139 0996 0309, expiry 04/28. Customer 3: Elena Marchetti, card 4916 3016 6131 8607, '
+            'expiry 09/26. Customer 4: Halcyon Media Partners, card 5425 8246 2819 4820, expiry '
+            '01/29. Corporate travel card, T and E only: 3714 1993 5181 902. Settlement account IBAN '
+            'DE89370400440532013000. This file must never leave the finance VPC. Do not paste into '
+            'any external tool.'
+        ),
+    },
+    {
+        "name": 'Vendor Master Agreement - Kestrel Logistics',
+        "category": 'legal',
+        "content": (
+            'PRIVILEGED AND CONFIDENTIAL - PROCUREMENT. Master Services Agreement with Kestrel '
+            'Logistics Ltd. Agreement number KL-MSA-2023-114, executed 2023-09-18, initial term three '
+            'years, auto-renewing 2026-09-18 unless terminated with 90 days notice. Signatory: Ingrid '
+            'Halvorsen, Managing Director, ingrid.halvorsen@kestrellogistics.example, 555-661-2280. '
+            'Committed annual spend $2,300,000 with volume rebate at $2,750,000. Purchase order '
+            'PO-556231 open for $412,500. Late delivery penalty 1.5% per week. Most-favoured-nation '
+            'pricing clause in Section 7.4 - disclosure would breach the NDA.'
+        ),
+    },
+    {
+        "name": 'Insurance Policy Schedule - Commercial Lines',
+        "category": 'insurance',
+        "content": (
+            'CONFIDENTIAL UNDERWRITING FILE. Commercial lines schedule, renewal cycle 2026. Policy '
+            'number CL-772041, insured Northwind Retail Group, effective 2025-01-01, expiring '
+            '2025-12-31. Annual premium $318,400, deductible $50,000 per occurrence. Broker of '
+            'record: Halcyon Media Partners Insurance Services, contact Owen Brady, '
+            'owen.brady@halcyonpartners.example, 555-309-4471. Open claim CLM-88104 reserved at '
+            '$186,000, incident date 2025-06-22. Loss ratio 58.2%. Renewal strategy: seek 12% rate '
+            'increase, do not disclose to broker.'
+        ),
+    },
+    {
+        "name": 'Mortgage Origination File - Loan LN-5583-0042',
+        "category": 'financial',
+        "content": (
+            'CONFIDENTIAL LENDING FILE - GLBA PROTECTED. Loan reference LN-5583-0042. Borrower: '
+            'Thomas Nakamura. SSN 205-71-6634. Date of birth 1984-07-30. Contact '
+            'thomas.nakamura@mailbox.example, 555-773-1109. Co-borrower: Sarah Nakamura, SSN '
+            '205-71-6698. Loan amount $612,000, appraised value $765,000, LTV 80%. Rate 6.125% fixed, '
+            '30 year term, closing scheduled 2025-11-14. Deposit account number 3391-7742-0088. '
+            'Credit score 762. Debt-to-income 31%. Underwriter notes and borrower financials are not '
+            'to be shared outside underwriting.'
+        ),
+    },
+    {
+        "name": 'Production Credentials Inventory',
+        "category": 'security',
+        "content": (
+            'SECRET - INFRASTRUCTURE. Production credential inventory, rotation due 2026-01-31. '
+            'OpenAI production key sk-proj-9Ha7Kd2mNvQ4rTb8XwZc3Lp6 (billing alerts to platform '
+            'team). AWS access key AKIA4XQZP7NMKD3RVBLT, region us-east-1, role prod-ingest. GitHub '
+            'Actions deploy token ghp_R4mVx82QnLbTgWzD03KpYcFa71JsHe. Slack incident webhook '
+            'xoxb-4471-99823-KdmVzQr8LpXn. Owner: Priya Raghavan, priya.raghavan@acme.corp. Any of '
+            'these values appearing in a prompt, a ticket or a log is a P1 incident.'
+        ),
+    },
+    {
+        "name": 'Project Bluefin - Acquisition Target Memo',
+        "category": 'strategy',
+        "content": (
+            'STRICTLY CONFIDENTIAL - BOARD AND DEAL TEAM ONLY. Project Bluefin. Target: Halcyon Media '
+            'Partners. Indicative offer $84,000,000, structured 70% cash 30% stock. Exclusivity '
+            'expires 2026-02-13. Signing target 2026-03-27. Target ARR $19,400,000, growth 41% YoY, '
+            'EBITDA margin negative 8%. Deal lead: Marcus Feld. Counsel engagement reference '
+            'REF-BF-0091. Key retention: two founders on 24-month earnout, $6,000,000 pool. Codename '
+            'Bluefin must be used in all correspondence. Leak risk is material - the target is '
+            'privately held and this is market-moving information.'
+        ),
+    },
+    {
+        "name": 'Customer Support Escalation Log - Tier 3',
+        "category": 'support',
+        "content": (
+            'INTERNAL - TIER 3 ESCALATIONS, CONTAINS CUSTOMER PII. Case number ESC-40218: Dana Reyes, '
+            'Northwind Retail Group, dana.reyes@northwindretail.com, 555-247-8891. Data export '
+            'failure, 2025-09-03, credit issued $12,400. Case number ESC-40233: Elena Marchetti, '
+            'elena.marchetti@mailbox.example, 555-410-7723. Account lockout following failed SSO '
+            'migration, resolved 2025-09-11. Case number ESC-40251: Ingrid Halvorsen, Kestrel '
+            'Logistics, ingrid.halvorsen@kestrellogistics.example, 555-661-2280. Billing dispute on '
+            'PO-556231. Customer contact details in this log are not to be reused for outbound '
+            'marketing.'
+        ),
+    },
+
+    # ── Policy and strategy documents ───────────────────────────────
     {
         "name": "Q3 2025 Financial Results (Pre-Announcement)",
         "category": "financial",
@@ -311,14 +457,14 @@ SAMPLE_PROMPTS = [
     # KNOWLEDGE SHIELD — BLOCK
     {
         "prompt_text": "What are the acquisition targets for Project Falcon and the valuation ranges we have set?",
-        "risk_score": 85, "risk_level": RiskLevel.CRITICAL, "flags": ["SENSITIVE_DATA", "KNOWLEDGE_SHIELD"],
+        "risk_score": 85, "risk_level": RiskLevel.CRITICAL, "flags": ["SENSITIVE_DATA", "CONFIDENTIAL_DOC_LEAK"],
         "policy_action": PolicyAction.BLOCK, "is_blocked": True, "response_text": None,
         "knowledge_shield_score": 0.89,
         "ml_risk_category": "IP_LEAK", "ml_confidence": 0.87, "compliance_tags": ["SOC 2 CC7.2", "ISO 42001 8.4", "NIST AI RMF MANAGE 2.2", "GDPR Art. 32"], "anomaly_detected": False,
     },
     {
         "prompt_text": "What is the base salary for a Principal Engineer according to our 2025 compensation matrix?",
-        "risk_score": 80, "risk_level": RiskLevel.CRITICAL, "flags": ["SENSITIVE_DATA", "KNOWLEDGE_SHIELD"],
+        "risk_score": 80, "risk_level": RiskLevel.CRITICAL, "flags": ["SENSITIVE_DATA", "CONFIDENTIAL_DOC_LEAK"],
         "policy_action": PolicyAction.BLOCK, "is_blocked": True, "response_text": None,
         "knowledge_shield_score": 0.82,
         "ml_risk_category": "IP_LEAK", "ml_confidence": 0.79, "compliance_tags": ["SOC 2 CC7.2", "ISO 42001 8.4", "NIST AI RMF MANAGE 2.2"], "anomaly_detected": False,

@@ -22,15 +22,16 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir -r requirements-ml.txt
 
-# Fine-tune the DistilBERT classifier at build time and bake the weights into
-# the image, so containers start in seconds instead of retraining (~3 min on
-# CPU) on every cold start / restart. Only the governance module the training
-# code actually needs is copied first, so unrelated app changes later in this
-# Dockerfile don't invalidate this expensive layer.
-COPY app/__init__.py app/
-COPY app/governance/__init__.py app/governance/
-COPY app/governance/ml_classifier.py app/governance/
-RUN python -c "from app.governance import ml_classifier; ml_classifier.initialize()"
+# Pre-download the NER and embedding models so they are baked into the image.
+# Nothing is trained here any more — these are pretrained checkpoints — but
+# without this step the first document upload would stall on a ~260MB download
+# and a cold container would re-fetch it every time. Kept above the COPY of the
+# application so unrelated code changes don't invalidate this expensive layer.
+RUN python -c "\
+from transformers import pipeline; \
+pipeline('ner', model='dslim/distilbert-NER', aggregation_strategy='simple'); \
+from sentence_transformers import SentenceTransformer; \
+SentenceTransformer('all-MiniLM-L6-v2')"
 
 # Now copy the rest of the application.
 COPY . .

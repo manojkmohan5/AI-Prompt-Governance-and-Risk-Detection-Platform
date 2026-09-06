@@ -1,13 +1,16 @@
 # ML dependencies. Install with: pip install -r requirements-ml.txt
 #
-# NOT fully optional despite the filename: sentence-transformers pulls in
-# torch + transformers as its own dependencies, and app/governance/ml_classifier.py
-# (the core governance classifier, used on every single prompt) needs those
-# two packages unconditionally — main.py's startup lifespan always calls
-# ml_classifier.initialize(), so the app won't actually start without this
-# file installed. Only faiss-cpu/scikit-learn (Knowledge Shield specifically)
-# are genuinely optional — Knowledge Shield alone degrades to "inactive"
-# if the encoder is unavailable.
+# Genuinely optional now. Nothing on the per-prompt path needs a model:
+# detection is regex plus dict lookups against the document entity index.
+#
+# These packages improve Knowledge Shield coverage rather than enable it:
+#   sentence-transformers + faiss-cpu → the advisory topic-similarity signal
+#   transformers (pulled in by the above) → NER over uploaded documents, which
+#     is what indexes person and organisation names
+#
+# Without them the shield still blocks leaks, using regex identifiers only —
+# names go unindexed. GET /api/v1/knowledge-shield/status reports which
+# coverage is actually active via ner_enabled / similarity_ready.
 sentence-transformers==3.3.0
 scikit-learn==1.5.2
 faiss-cpu==1.9.0

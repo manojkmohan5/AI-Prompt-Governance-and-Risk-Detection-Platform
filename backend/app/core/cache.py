@@ -1,17 +1,18 @@
 """
-Redis-backed cache for the two expensive transformer forward passes in the
-governance pipeline: the DistilBERT classifier (app.governance.ml_classifier)
-and the Knowledge Shield similarity search (app.embeddings.knowledge_shield).
+Redis-backed cache for the one remaining expensive forward pass in the
+governance pipeline: the Knowledge Shield similarity search
+(app.embeddings.knowledge_shield). Prompt inspection is regex and dict
+lookups now, which is cheaper to redo than to cache.
 
 Optional by design, same pattern as app/embeddings/encoder.py: if Redis is
 unreachable or the redis package isn't installed, every call here is a no-op
 and callers fall back to running the forward pass uncached rather than
 failing. Redis is never a hard dependency of the app.
 
-Cache keys are namespaced with a fingerprint of the underlying model/index
-(see classifier_fingerprint / knowledge_shield_fingerprint) so a retrain or
-a Knowledge Shield document change naturally invalidates old entries instead
-of silently serving stale scores under an unchanged key.
+Cache keys are namespaced with a fingerprint of the underlying index (see
+knowledge_shield_fingerprint) so a Knowledge Shield document change naturally
+invalidates old entries instead of silently serving stale scores under an
+unchanged key.
 """
 import hashlib
 import logging
@@ -121,18 +122,6 @@ async def cache_set_async(key: str, value: str, ttl: int | None = None) -> None:
     except Exception as e:
         logger.warning("Redis (async) SET failed, disabling cache: %s", e)
         _async_client_unavailable = True
-
-
-def classifier_fingerprint() -> str:
-    """Changes whenever the fine-tuned classifier is retrained, so stale
-    cache entries from a previous model version are never served."""
-    from app.governance.ml_classifier import MODEL_CACHE
-    weights = MODEL_CACHE / "model.safetensors"
-    try:
-        stat = weights.stat()
-        return f"{stat.st_mtime_ns}-{stat.st_size}"
-    except FileNotFoundError:
-        return "untrained"
 
 
 def knowledge_shield_fingerprint() -> str:

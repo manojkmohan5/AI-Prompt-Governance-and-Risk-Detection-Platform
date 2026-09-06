@@ -1,59 +1,36 @@
 """
-Response Inspection — ML-based, zero regex.
+Response Inspection — checks what the LLM sends back.
 
-Scans LLM output for credential leakage, harmful instructions, and injection
-attempts using the same fine-tuned DistilBERT multi-label classifier used for
-prompt inspection.
+Two things matter on the way out:
 
-Long responses are split into overlapping character windows; the worst-case
-(maximum) confidence per category wins. Thresholds are intentionally higher
-than prompt thresholds so that explanatory / educational LLM responses about
-security topics do not produce false positives.
+  1. Confidential document content in the response. Same entity index used on
+     the prompt: if a value from a protected document appears in the answer,
+     the document leaked regardless of how the prompt was worded.
+
+  2. Credentials and PII in the response. Regex over the same identifier
+     patterns — an API key or an SSN in generated text is a leak whether the
+     model invented it or repeated it.
+
+This is regex plus dict lookups, so unlike the classifier it previously used
+it is cheap enough to run on every response with no model loaded.
 """
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from app.governance import ml_classifier
+from app.governance import entities as ent
 
-# Character window size per chunk (~300 words, well within BERT's 512-token limit)
-_CHUNK_SIZE = 900
-_CHUNK_OVERLAP = 150
-
-# Category → response flag
-_CATEGORY_TO_FLAG: Dict[str, str] = {
-    "SENSITIVE_DATA":   "RESPONSE_SECRET_LEAK",
-    "ML_HIGH_RISK":     "RESPONSE_SECRET_LEAK",
-    "TOXICITY":         "RESPONSE_UNSAFE_CONTENT",
-    "PROMPT_INJECTION": "RESPONSE_INJECTION_ATTEMPT",
-}
-
-# Higher thresholds than prompt inspection: a response explaining security topics
-# (e.g. "API keys look like sk-...") should NOT trigger; only genuinely harmful
-# or leaking content should.
-_THRESHOLDS: Dict[str, float] = {
-    "SENSITIVE_DATA":   0.55,
-    "ML_HIGH_RISK":     0.52,
-    "TOXICITY":         0.58,
-    "PROMPT_INJECTION": 0.55,
-}
+_SECRET_TYPES = frozenset({"API_KEY", "IBAN", "CREDIT_CARD"})
 
 
 @dataclass
 class ResponseInspectionResult:
     secrets_detected: bool = False
-    unsafe_content: bool = False
+    pii_detected: bool = False
+    doc_leak_detected: bool = False
     flags: List[str] = field(default_factory=list)
-    ml_scores: Dict[str, float] = field(default_factory=dict)
-
-
-def _chunks(text: str) -> List[str]:
-    if len(text) <= _CHUNK_SIZE:
-        return [text]
-    parts, start = [], 0
-    while start < len(text):
-        parts.append(text[start: start + _CHUNK_SIZE])
-        start += _CHUNK_SIZE - _CHUNK_OVERLAP
-    return parts
+    entities: List[ent.Entity] = field(default_factory=list)
+    doc_matches: List = field(default_factory=list)
+    ml_scores: Dict[str, float] = field(default_factory=dict)   # retained for audit shape
 
 
 def inspect_response(text: str) -> ResponseInspectionResult:
@@ -61,23 +38,32 @@ def inspect_response(text: str) -> ResponseInspectionResult:
     if not text or not text.strip():
         return result
 
-    # Accumulate maximum confidence per tracked category across all chunks
-    max_scores: Dict[str, float] = {cat: 0.0 for cat in _CATEGORY_TO_FLAG}
+    result.entities = ent.extract_identifiers(text)
 
-    for chunk in _chunks(text):
-        scores = ml_classifier.classify(chunk)
-        for cat in _CATEGORY_TO_FLAG:
-            if scores.get(cat, 0.0) > max_scores[cat]:
-                max_scores[cat] = scores[cat]
+    if any(e.type in _SECRET_TYPES for e in result.entities):
+        result.secrets_detected = True
+        result.flags.append("RESPONSE_SECRET_LEAK")
 
-    result.ml_scores = max_scores
+    if any(e.type in ent.PII_TYPES for e in result.entities):
+        result.pii_detected = True
+        result.flags.append("RESPONSE_PII_LEAK")
 
-    for cat, flag in _CATEGORY_TO_FLAG.items():
-        if max_scores[cat] >= _THRESHOLDS.get(cat, 0.55) and flag not in result.flags:
-            result.flags.append(flag)
-            if flag == "RESPONSE_SECRET_LEAK":
-                result.secrets_detected = True
-            elif flag == "RESPONSE_UNSAFE_CONTENT":
-                result.unsafe_content = True
+    # Imported here rather than at module scope: knowledge_shield imports the
+    # governance package, and this keeps that dependency one-directional.
+    from app.embeddings import knowledge_shield
+
+    result.doc_matches = knowledge_shield.match_entities(text)
+    if any(m.conclusive for m in result.doc_matches):
+        result.doc_leak_detected = True
+        result.flags.append("RESPONSE_DOC_LEAK")
 
     return result
+
+
+def redact_response(text: str, result: ResponseInspectionResult) -> str:
+    """Mask leaked spans in the response, keeping the rest of the answer usable."""
+    spans = [e for e in result.entities if e.type in ent.PII_TYPES or e.type in _SECRET_TYPES]
+    spans += [
+        ent.Entity(m.type, m.value, m.start, m.end, "") for m in result.doc_matches
+    ]
+    return ent.redact(text, spans)

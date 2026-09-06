@@ -2,14 +2,14 @@
 Prompt Service — orchestrates the full governance pipeline for each prompt.
 
 Pipeline:
-  1. BERT Inspection  (ML-only, no regex)
-  2. Risk Scoring     (confidence-weighted)
-  3. Knowledge Shield (FAISS semantic search)
+  1. Inspection       (regex entities + injection phrases — no model)
+  2. Knowledge Shield (document entity index + advisory similarity)
+  3. Risk Scoring     (evidence-based points)
   4. Anomaly Detection (Z-score per-user baseline)
   5. Compliance Mapping
   6. Policy Enforcement
-  7. LLM Call (if not blocked)
-  8. Response Inspection
+  7. LLM Call (if not blocked), with leaked spans masked
+  8. Response Inspection, with leaked spans masked
   9. Persist
 """
 import time
@@ -17,12 +17,11 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.embeddings import knowledge_shield
 from app.governance import inspector as insp_module
-from app.governance import ml_classifier, compliance_mapper, policy_engine, response_inspector, risk_scorer
+from app.governance import compliance_mapper, entities as ent, policy_engine, response_inspector, risk_scorer
 from app.models.audit_log import AuditLog
-from app.models.prompt import PolicyAction, PromptRecord, RiskLevel
+from app.models.prompt import PolicyAction, PromptRecord
 from app.models.risk_event import RiskEvent, RiskEventSeverity
 from app.models.user import User
 from app.services import anomaly_service, llm_service
@@ -40,28 +39,27 @@ async def process(
     username = user.username if user else "anonymous"
     dept = department or (user.department if user else None)
 
-    # ── 1. ML Inspection (fine-tuned DistilBERT, zero regex) ──────────────────
+    # ── 1. Inspection (regex entities + injection phrases) ────────────────────
     inspection = insp_module.inspector.inspect(prompt_text)
-    ml_scores = inspection.ml_scores
 
-    # ── 2. Risk Scoring (confidence-weighted per category) ────────────────────
-    risk_score, risk_level, flags = risk_scorer.score(inspection)
+    # ── 2. Knowledge Shield ───────────────────────────────────────────────────
+    # Runs unconditionally. It used to be gated behind a risk score, which meant
+    # a calmly-worded prompt quoting a document verbatim — the exact thing this
+    # check exists to catch — was never compared against the documents at all.
+    shield = await knowledge_shield.check_prompt(prompt_text)
+    ks_score = shield.similarity
+    doc_matches = shield.matches if shield.confirmed_leak else []
 
-    # Derive primary ML category for record storage (highest above-threshold score)
-    ml_category, ml_confidence = ml_classifier.top_category(ml_scores)
+    # ── 3. Risk Scoring ───────────────────────────────────────────────────────
+    risk_score, risk_level, flags = risk_scorer.score(
+        inspection, doc_matches=doc_matches, topic_similar=shield.topic_similar,
+    )
 
-    # ── 3. Knowledge Shield ───────────────────────────────────────────────────
-    ks_score = None
-    if risk_score >= 20:
-        ks_score = await knowledge_shield.check_similarity(prompt_text)
-        if ks_score is not None and ks_score >= settings.KNOWLEDGE_SHIELD_THRESHOLD:
-            if "KNOWLEDGE_SHIELD" not in flags:
-                flags.append("KNOWLEDGE_SHIELD")
-            risk_score = min(risk_score + 20, 100)
-            if risk_score >= 80:
-                risk_level = RiskLevel.CRITICAL
-            elif risk_score >= 60:
-                risk_level = RiskLevel.HIGH
+    # Primary risk category for record storage. Confidence is 1.0 for anything
+    # matched by regex or found in the document index — these are exact hits,
+    # not estimates, and recording a fake probability would misrepresent them.
+    ml_category = flags[0] if flags else None
+    ml_confidence = 1.0 if flags else None
 
     # ── 4. Anomaly Detection ──────────────────────────────────────────────────
     is_anomaly, anomaly_z, _baseline_avg = await anomaly_service.check(user, risk_score, db)
@@ -84,16 +82,27 @@ async def process(
     if not is_blocked:
         send_text = prompt_text
         if policy_action == PolicyAction.REDACT.value:
-            redacted_prompt = insp_module.inspector.redact_pii(prompt_text)
+            # Mask PII spans and any value traced to a protected document. Both
+            # are needed: redacting PII alone would still forward a document's
+            # contract dates or party names verbatim to the LLM.
+            spans = [e for e in inspection.entities if e.type in ent.PII_TYPES]
+            spans += [
+                ent.Entity(m.type, m.value, m.start, m.end, "") for m in shield.matches
+            ]
+            redacted_prompt = ent.redact(prompt_text, spans)
             send_text = redacted_prompt
 
         response_text, tokens_used = await llm_service.complete(send_text, model)
 
         # ── 8. Response Inspection ────────────────────────────────────────────
+        # The prompt is not the only way a document leaks: the model can name
+        # protected values in an answer to a prompt that contained none.
         resp_result = response_inspector.inspect_response(response_text)
         if resp_result.flags:
             flags.extend(resp_result.flags)
             compliance_tags = compliance_mapper.get_tags(flags)
+            # Flagging alone would still hand the leaked value to the caller.
+            response_text = response_inspector.redact_response(response_text, resp_result)
 
     latency_ms = int((time.monotonic() - t_start) * 1000)
 
@@ -135,9 +144,14 @@ async def process(
             "flags":            flags,
             "is_blocked":       is_blocked,
             "latency_ms":       latency_ms,
-            "ml_scores":        {k: round(v, 3) for k, v in ml_scores.items()},
+            "entities":         [{"type": e.type, "value": e.value} for e in inspection.entities],
+            "injection_spans":  inspection.injection_spans,
+            "doc_matches":      [
+                {"type": m.type, "value": m.value, "document": m.doc_name}
+                for m in shield.matches
+            ],
+            "shield_similarity": round(ks_score, 4) if ks_score is not None else None,
             "ml_category":      ml_category,
-            "ml_confidence":    round(ml_confidence, 4) if ml_confidence else None,
             "anomaly_detected": is_anomaly,
             "compliance_tags":  compliance_tags,
         },
@@ -148,14 +162,14 @@ async def process(
 
     # ── 11. Risk Events ───────────────────────────────────────────────────────
     _severity = {
-        "PROMPT_INJECTION": RiskEventSeverity.CRITICAL,
-        "KNOWLEDGE_SHIELD": RiskEventSeverity.HIGH,
-        "TOXICITY":         RiskEventSeverity.CRITICAL,
-        "PII_DETECTED":     RiskEventSeverity.HIGH,
-        "SENSITIVE_DATA":   RiskEventSeverity.MEDIUM,
-        "IP_LEAK":          RiskEventSeverity.HIGH,
-        "ML_HIGH_RISK":     RiskEventSeverity.HIGH,
-        "USER_ANOMALY":     RiskEventSeverity.HIGH,
+        "PROMPT_INJECTION":      RiskEventSeverity.CRITICAL,
+        "CONFIDENTIAL_DOC_LEAK": RiskEventSeverity.CRITICAL,
+        "RESPONSE_DOC_LEAK":     RiskEventSeverity.CRITICAL,
+        "RESPONSE_PII_LEAK":     RiskEventSeverity.HIGH,
+        "RESPONSE_SECRET_LEAK":  RiskEventSeverity.CRITICAL,
+        "PII_DETECTED":          RiskEventSeverity.HIGH,
+        "SENSITIVE_DATA":        RiskEventSeverity.MEDIUM,
+        "USER_ANOMALY":          RiskEventSeverity.HIGH,
     }
     for flag in flags:
         if flag in _severity:
@@ -164,11 +178,14 @@ async def process(
                 risk_type=flag,
                 severity=_severity[flag],
                 details={
-                    "risk_score":    risk_score,
-                    "username":      username,
-                    "ml_category":   ml_category,
-                    "ml_confidence": round(ml_confidence, 4) if ml_confidence else None,
-                    "ml_scores":     {k: round(v, 3) for k, v in ml_scores.items()},
+                    "risk_score":  risk_score,
+                    "username":    username,
+                    "ml_category": ml_category,
+                    "documents":   shield.documents,
+                    "doc_matches": [
+                        {"type": m.type, "value": m.value, "document": m.doc_name}
+                        for m in shield.matches
+                    ],
                 },
             ))
 

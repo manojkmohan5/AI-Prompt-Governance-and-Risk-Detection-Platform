@@ -9,20 +9,21 @@ python -m venv venv && source venv/bin/activate   # macOS/Linux
 pip install -r requirements.txt -r requirements-ml.txt   # both required — see note below
 cp ../.env.example .env                              # then set GROQ_API_KEY
 
-uvicorn main:app --host 0.0.0.0 --port 8001          # run API (fine-tunes DistilBERT on first run, ~3 min on CPU; cached after in app/governance/_bert_finetuned/)
+uvicorn main:app --host 0.0.0.0 --port 8001          # run API (starts immediately; nothing is trained at boot)
 python -m seed_data.seed                             # seed demo users, policies, prompt history, protected docs
 ```
 
-`requirements-ml.txt`'s own comment says it's "optional, needed for Knowledge Shield" — that's misleading. `app/governance/ml_classifier.py` imports `torch`/`transformers` directly (lazily, inside functions) and `main.py`'s startup lifespan always calls `ml_classifier.initialize()` unconditionally, so the app won't actually start without those packages. Only `sentence-transformers`/`faiss-cpu` (Knowledge Shield specifically) are genuinely optional.
+`requirements-ml.txt` is genuinely optional. No model runs on the per-prompt path — detection is regex plus dict lookups against the document entity index. Those packages widen Knowledge Shield coverage rather than enable it: `transformers` gives NER over uploaded documents (so person and organisation names get indexed), `sentence-transformers`/`faiss-cpu` give the advisory topic-similarity signal. Without them the shield still blocks leaks using regex identifiers alone. `GET /api/v1/knowledge-shield/status` reports which coverage is live via `ner_enabled` / `similarity_ready`.
 
 ```bash
-cd backend && pytest -v   # small suite in tests/, currently covers app/core/cache.py
+cd backend && pytest -v   # tests/ covers app/core/cache.py and leak detection
 ```
+`tests/test_leak_detection.py` is deliberately hermetic — NER is stubbed off and no embedding model loads, so it runs offline and exercises the regex-only degraded path.
 No linter is configured for the backend.
 
 ### Docker
 
-`docker-compose.yml` (repo root) runs backend + frontend + Redis together — `docker compose up --build`. `backend/Dockerfile` fine-tunes the classifier *at image build time* (see the layering comments in the Dockerfile) so containers start in seconds rather than retraining on every boot; only `app/governance/ml_classifier.py` is copied in before that RUN step so unrelated code changes don't invalidate the expensive layer. Torch is installed from `https://download.pytorch.org/whl/cpu` explicitly — the default PyPI wheel for linux/aarch64 pulls in ~1.5GB of unused NVIDIA/CUDA packages otherwise.
+`docker-compose.yml` (repo root) runs backend + frontend + Redis together — `docker compose up --build`. `backend/Dockerfile` pre-downloads the NER and embedding checkpoints *at image build time* (see the layering comments in the Dockerfile) so a cold container doesn't re-fetch ~260MB on first document upload. That RUN step sits above the app COPY so unrelated code changes don't invalidate the expensive layer. Torch is installed from `https://download.pytorch.org/whl/cpu` explicitly — the default PyPI wheel for linux/aarch64 pulls in ~1.5GB of unused NVIDIA/CUDA packages otherwise.
 
 ## Architecture
 
@@ -30,17 +31,17 @@ No linter is configured for the backend.
 
 `app/services/prompt_service.py::process()` is the orchestrator every prompt flows through, in this exact order:
 
-1. **ML Inspection** (`app/governance/inspector.py` + `ml_classifier.py`) — single DistilBERT forward pass returns sigmoid confidence per category; scores above per-category thresholds become governance flags. Zero regex anywhere in detection.
-2. **Risk Scoring** (`risk_scorer.py`) — `score = base_points × min(confidence/norm, 1.0)` per flagged category, summed, plus a co-occurrence bonus for 2+ simultaneous flags and a length penalty. Maps to LOW/MEDIUM/HIGH/CRITICAL.
-3. **Knowledge Shield** (`app/embeddings/knowledge_shield.py`) — only runs if risk_score ≥ 20; FAISS cosine similarity against confidential document embeddings (SentenceTransformers). A match adds the `KNOWLEDGE_SHIELD` flag and +20 risk.
+1. **Inspection** (`app/governance/inspector.py` + `entities.py`) — regex extracts format-defined identifiers (SSN, card w/ Luhn, email, phone, contract dates, money, reference numbers, API keys) with exact character spans, plus a phrase list for common injection openers. No model, ~1ms.
+2. **Knowledge Shield** (`app/embeddings/knowledge_shield.py`) — runs *unconditionally*. Two signals: an exact match of prompt values against the document entity index (evidence — drives block/redact), and chunked FAISS cosine similarity (advisory — warns only, never blocks alone). Values are normalised before lookup, so reformatting an identifier doesn't evade the check.
+3. **Risk Scoring** (`risk_scorer.py`) — flat points for what was actually found, summed, plus a co-occurrence bonus and length penalty. A conclusive document match scores 85; topic similarity alone scores 15, deliberately below the block threshold.
 4. **Anomaly Detection** (`app/services/anomaly_service.py`) — per-user Z-score against their rolling risk baseline (needs ≥5 prior prompts); `USER_ANOMALY` flag adds +10 risk.
 5. **Compliance Mapping** (`app/governance/compliance_mapper.py`) — static flag → {GDPR, HIPAA, SOC2, EU AI Act, ISO 42001, NIST AI RMF} lookup table, purely for audit evidence tagging.
 6. **Policy Enforcement** (`app/governance/policy_engine.py`) — loads active `PolicyRule` rows ordered by priority, evaluates each rule's condition (`risk_score_above` / `flag_contains` / `department_is` / `always`), and takes the *strictest* matching action (ALLOW < WARN < REDACT < BLOCK).
-7. **LLM Call** (`app/services/llm_service.py`) — skipped if the action is BLOCK. If REDACT, the prompt is passed through ML-based sentence-level redaction (`ml_classifier.redact_entities`) before being sent to Groq (OpenAI-compatible client). Falls back to a mock response string if `GROQ_API_KEY` is unset.
-8. **Response Inspection** (`app/governance/response_inspector.py`) — re-runs the same DistilBERT classifier over chunked LLM output with *higher* thresholds than prompt inspection (so explanatory/educational responses about security topics don't false-positive), looking for leaked secrets, unsafe content, or injection artifacts in the model's own reply.
+7. **LLM Call** (`app/services/llm_service.py`) — skipped if the action is BLOCK. If REDACT, PII spans and any value traced to a protected document are masked *in place* (`entities.redact`) before the prompt goes to Groq, so the surrounding question stays usable. Falls back to a mock response string if `GROQ_API_KEY` is unset.
+8. **Response Inspection** (`app/governance/response_inspector.py`) — regex identifiers plus the same document entity index over the LLM's reply, because a document can leak in the answer to a prompt that contained nothing. Leaked spans are masked before the response reaches the caller, not merely flagged.
 9. **Persist** — writes `PromptRecord`, `AuditLog`, and one `RiskEvent` per severity-mapped flag, all in the same DB transaction.
 
-When touching detection behavior, the fine-tuning corpus and per-category thresholds live together in `app/governance/ml_classifier.py` — retraining requires deleting `app/governance/_bert_finetuned/` so `initialize()` re-fine-tunes on next startup.
+When touching detection behavior, the regex patterns and normalisation rules live in `app/governance/entities.py`; the specificity tiers that decide what counts as a confirmed leak live in `app/embeddings/knowledge_shield.py` (`_HIGH_SPECIFICITY` / `_LOW_SPECIFICITY` / `confirm_leak`). There is no model to retrain — changing detection means changing a pattern or a tier.
 
 ### Layout
 

@@ -25,9 +25,15 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     FAISS_INDEX_PATH: str = "data/faiss_index"
 
-    # Redis cache for the ML classifier + Knowledge Shield similarity search —
-    # both run a transformer forward pass per call. Optional: if REDIS_URL is
-    # unreachable or the redis package isn't installed, both fall back to
+    # NER model for pulling names and organisations out of uploaded documents.
+    # Runs at document upload only, never per prompt. Optional: if it cannot be
+    # loaded, documents are indexed by regex identifiers alone and the shield
+    # keeps working with reduced name coverage.
+    NER_MODEL: str = "dslim/distilbert-NER"
+
+    # Redis cache for the Knowledge Shield similarity search, the one call left
+    # that runs a transformer forward pass. Optional: if REDIS_URL is
+    # unreachable or the redis package isn't installed, it falls back to
     # running uncached rather than failing.
     REDIS_URL: str = "redis://localhost:6379/0"
     CACHE_ENABLED: bool = True
