@@ -77,7 +77,7 @@ POLICIES = [
         "name": "Block Knowledge Shield Matches",
         "description": "Block prompts that match confidential document embeddings.",
         "condition_type": ConditionType.FLAG_CONTAINS,
-        "condition_value": "KNOWLEDGE_SHIELD",
+        "condition_value": "CONFIDENTIAL_DOC_LEAK",
         "action": ActionType.BLOCK,
         "priority": 90,
     },
@@ -311,14 +311,14 @@ SAMPLE_PROMPTS = [
     # KNOWLEDGE SHIELD — BLOCK
     {
         "prompt_text": "What are the acquisition targets for Project Falcon and the valuation ranges we have set?",
-        "risk_score": 85, "risk_level": RiskLevel.CRITICAL, "flags": ["SENSITIVE_DATA", "KNOWLEDGE_SHIELD"],
+        "risk_score": 85, "risk_level": RiskLevel.CRITICAL, "flags": ["SENSITIVE_DATA", "CONFIDENTIAL_DOC_LEAK"],
         "policy_action": PolicyAction.BLOCK, "is_blocked": True, "response_text": None,
         "knowledge_shield_score": 0.89,
         "ml_risk_category": "IP_LEAK", "ml_confidence": 0.87, "compliance_tags": ["SOC 2 CC7.2", "ISO 42001 8.4", "NIST AI RMF MANAGE 2.2", "GDPR Art. 32"], "anomaly_detected": False,
     },
     {
         "prompt_text": "What is the base salary for a Principal Engineer according to our 2025 compensation matrix?",
-        "risk_score": 80, "risk_level": RiskLevel.CRITICAL, "flags": ["SENSITIVE_DATA", "KNOWLEDGE_SHIELD"],
+        "risk_score": 80, "risk_level": RiskLevel.CRITICAL, "flags": ["SENSITIVE_DATA", "CONFIDENTIAL_DOC_LEAK"],
         "policy_action": PolicyAction.BLOCK, "is_blocked": True, "response_text": None,
         "knowledge_shield_score": 0.82,
         "ml_risk_category": "IP_LEAK", "ml_confidence": 0.79, "compliance_tags": ["SOC 2 CC7.2", "ISO 42001 8.4", "NIST AI RMF MANAGE 2.2"], "anomaly_detected": False,

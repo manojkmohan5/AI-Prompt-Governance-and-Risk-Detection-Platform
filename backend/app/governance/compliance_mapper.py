@@ -23,28 +23,18 @@ _MAP: Dict[str, List[Dict]] = {
         {"framework": "ISO 42001",   "article": "8.4",         "detail": "AI system security and adversarial attack controls"},
         {"framework": "SOC 2",       "article": "CC7.2",       "detail": "System monitoring for malicious activity"},
     ],
-    "KNOWLEDGE_SHIELD": [
+    "CONFIDENTIAL_DOC_LEAK": [
         {"framework": "SOC 2",       "article": "CC7.2",       "detail": "Continuous monitoring and anomaly detection"},
         {"framework": "ISO 42001",   "article": "8.4",         "detail": "AI intellectual property and data protection"},
         {"framework": "NIST AI RMF", "article": "MANAGE 2.2",  "detail": "AI incident response and recovery"},
         {"framework": "GDPR",        "article": "Art. 32",     "detail": "Security measures to prevent unauthorized disclosure"},
-    ],
-    "TOXICITY": [
-        {"framework": "EU AI Act",   "article": "Art. 5",      "detail": "Prohibited AI practices — harmful or manipulative content"},
-        {"framework": "NIST AI RMF", "article": "MAP 5.1",     "detail": "Identification and prevention of harmful AI outputs"},
-        {"framework": "ISO 42001",   "article": "6.1.2",       "detail": "AI risk treatment for harmful content generation"},
     ],
     "USER_ANOMALY": [
         {"framework": "SOC 2",       "article": "CC7.3",       "detail": "Detection of anomalies and threats to system security"},
         {"framework": "NIST AI RMF", "article": "MEASURE 2.5", "detail": "Ongoing monitoring of AI risk indicators"},
         {"framework": "ISO 42001",   "article": "9.1",         "detail": "Monitoring and measurement of AI management system"},
     ],
-    "ML_HIGH_RISK": [
-        {"framework": "EU AI Act",   "article": "Art. 9",      "detail": "Risk management obligations for high-risk AI use cases"},
-        {"framework": "NIST AI RMF", "article": "MAP 1.6",     "detail": "AI risk identification and prioritization"},
-        {"framework": "ISO 42001",   "article": "6.1.2",       "detail": "AI risk treatment plans"},
-    ],
-    "IP_LEAK": [
+    "KNOWLEDGE_SHIELD_SIMILAR": [
         {"framework": "SOC 2",       "article": "CC7.2",       "detail": "Monitoring for unauthorised access to intellectual property"},
         {"framework": "ISO 42001",   "article": "8.4",         "detail": "AI intellectual property and data protection controls"},
         {"framework": "NIST AI RMF", "article": "MANAGE 2.2",  "detail": "AI incident response — confidential data exfiltration"},
@@ -55,10 +45,16 @@ _MAP: Dict[str, List[Dict]] = {
         {"framework": "SOC 2",       "article": "CC7.4",   "detail": "Security incident identification and response"},
         {"framework": "NIST AI RMF", "article": "MANAGE 2.4","detail": "AI output monitoring and corrective action"},
     ],
-    "RESPONSE_INJECTION_ATTEMPT": [
-        {"framework": "EU AI Act",   "article": "Art. 5",      "detail": "Prohibited AI output — adversarial instruction injection in responses"},
-        {"framework": "NIST AI RMF", "article": "MAP 5.1",     "detail": "Identification and prevention of harmful AI outputs"},
-        {"framework": "ISO 42001",   "article": "8.4",         "detail": "AI output validation and adversarial attack controls"},
+    "RESPONSE_DOC_LEAK": [
+        {"framework": "GDPR",        "article": "Art. 32",   "detail": "Security measures to prevent unauthorised disclosure"},
+        {"framework": "SOC 2",       "article": "CC7.4",     "detail": "Security incident identification and response"},
+        {"framework": "ISO 42001",   "article": "8.4",       "detail": "AI output validation — confidential document disclosure"},
+        {"framework": "NIST AI RMF", "article": "MANAGE 2.2","detail": "AI incident response — confidential data exfiltration"},
+    ],
+    "RESPONSE_PII_LEAK": [
+        {"framework": "GDPR",        "article": "Art. 5 & 32", "detail": "Personal data disclosed in generated output"},
+        {"framework": "HIPAA",       "article": "§164.502",    "detail": "Restrictions on use and disclosure of PHI"},
+        {"framework": "NIST AI RMF", "article": "MANAGE 2.4",  "detail": "AI output monitoring and corrective action"},
     ],
     "EXCESSIVE_LENGTH": [
         {"framework": "ISO 42001",  "article": "8.4",  "detail": "AI input validation and boundary controls"},
