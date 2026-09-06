@@ -41,6 +41,24 @@ No linter is configured for the backend.
 8. **Response Inspection** (`app/governance/response_inspector.py`) — regex identifiers plus the same document entity index over the LLM's reply, because a document can leak in the answer to a prompt that contained nothing. Leaked spans are masked before the response reaches the caller, not merely flagged.
 9. **Persist** — writes `PromptRecord`, `AuditLog`, and one `RiskEvent` per severity-mapped flag, all in the same DB transaction.
 
+### Adding protected documents
+
+Two ways in, one code path. `POST /knowledge-shield/documents` takes pasted
+JSON; `POST /knowledge-shield/documents/upload` takes a file (PDF, .docx, CSV,
+Markdown, text — 10MB cap). Both are **admin only**, like every route on that
+router: `require_admin` is a dependency on each one, so an employee can neither
+add to nor read the protected set.
+
+Extraction lives in `app/services/document_text.py`, deliberately outside the
+endpoint module — it is pure parsing with no auth, DB or FastAPI dependency, so
+it can be tested without importing the auth stack. It raises `ExtractionError`
+carrying an HTTP status and a message written for the admin who picked the
+file; the endpoint just re-raises it as an `HTTPException`.
+
+Fixtures for every supported format live in `sample_documents/` and are what
+`tests/test_document_upload.py` runs against, so regenerating them badly fails
+the suite rather than silently weakening detection.
+
 When touching detection behavior, the regex patterns and normalisation rules live in `app/governance/entities.py`; the specificity tiers that decide what counts as a confirmed leak live in `app/embeddings/knowledge_shield.py` (`_HIGH_SPECIFICITY` / `_LOW_SPECIFICITY` / `confirm_leak`). There is no model to retrain — changing detection means changing a pattern or a tier.
 
 ### Layout

@@ -152,6 +152,24 @@ Runs backend + frontend (nginx) + Redis together. The backend image pre-download
 
 ---
 
+## Adding protected documents
+
+Admins add confidential documents two ways — both index identically:
+
+- **Upload a file** — PDF, Word `.docx`, CSV, Markdown or text, up to 10MB.
+- **Paste the text** — for anything not in a file.
+
+Both routes require an admin; employees can neither add to nor read the
+protected set. Scanned or image-only PDFs are refused rather than stored,
+since they would index as protected while containing nothing matchable.
+
+`sample_documents/` holds ten fictional client and customer records covering
+every supported format — upload them to get a populated index for testing.
+See [sample_documents/README.md](sample_documents/README.md) for prompts that
+should and should not trip the shield.
+
+---
+
 ## Demo Accounts
 
 | Name | Email | Password | Role | Department |
