@@ -35,10 +35,8 @@ async def lifespan(app: FastAPI):
     # Apply non-destructive column migrations
     await _migrate()
 
-    # Pre-load / fine-tune DistilBERT classifier so first request is fast
-    from app.governance import ml_classifier
-    ml_classifier.initialize()
-
+    # Build the confidential-document entity index. Nothing is fine-tuned at
+    # boot any more; NER runs only over documents already in the database.
     # Initialize Knowledge Shield
     from app.embeddings import knowledge_shield
     await knowledge_shield.initialize()

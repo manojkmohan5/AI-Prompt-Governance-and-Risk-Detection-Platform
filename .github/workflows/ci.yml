@@ -37,9 +37,10 @@ jobs:
       - name: Install core + dev dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
         # requirements-ml.txt (torch/transformers/faiss) is intentionally not
-        # installed here — it's a large, slow install and app.governance.ml_classifier
-        # only imports those packages lazily inside functions, so this check
-        # doesn't need them to verify the app compiles and wires up correctly.
+        # installed here — it's a large, slow install, and every module that
+        # needs those packages imports them lazily inside functions. Detection
+        # itself is regex and dict lookups, so the leak-detection tests run
+        # fully without them.
 
       - name: Compile check (catches syntax errors)
         run: python -m compileall -q app main.py
@@ -79,7 +80,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build backend image (includes the DistilBERT fine-tune layer)
+      - name: Build backend image (includes the pre-downloaded model layer)
         uses: docker/build-push-action@v6
         with:
           context: ./backend

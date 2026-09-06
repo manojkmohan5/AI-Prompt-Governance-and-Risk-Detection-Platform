@@ -6,7 +6,13 @@
 
 ## What It Does
 
-Every prompt an employee submits passes through an **8-stage ML governance pipeline** before reaching the LLM. The platform detects PII, prompt injection, sensitive data, toxicity, IP leaks, and high-risk ML requests — all using a fine-tuned DistilBERT classifier (zero regex).
+Every prompt an employee submits passes through a **9-stage governance pipeline** before reaching the LLM.
+
+The core job is keeping confidential document content out of the LLM. Each uploaded document is indexed into its constituent entities — identifiers by regex, names by NER — and every prompt is checked against that index. A hit means a value that literally exists in a protected file was typed into the prompt: evidence, not a guess. That is what drives blocking and redaction.
+
+Semantic similarity is kept as a second, deliberately weaker signal. It only ever says "this prompt is about the same subject as a protected document", which is true of plenty of harmless prompts, so on its own it warns and never blocks.
+
+Nothing on the per-prompt path runs a model. Detection is regex and dict lookups (~1ms); NER runs only at document upload.
 
 ```
 User ──► Frontend (React/Vite :5173)
@@ -17,9 +23,10 @@ User ──► Frontend (React/Vite :5173)
     ┌─────────┴──────────────────────┐
     │        Governance Pipeline      │
     │                                 │
-    │  1. ML Inspection               │  Fine-tuned DistilBERT (6 categories)
-    │  2. Risk Scoring                │  Confidence-weighted, 0–100
-    │  3. Knowledge Shield            │  FAISS semantic search
+    │  1. Inspection                  │  Regex entities + injection phrases
+    │  2. Knowledge Shield            │  Doc entity index (exact)
+    │                                 │  + chunked FAISS (advisory)
+    │  3. Risk Scoring                │  Evidence-based points, 0–100
     │  4. Anomaly Detection           │  Z-score per-user baseline
     │  5. Compliance Mapping          │  GDPR · HIPAA · SOC2 · EU AI Act
     │  6. Policy Enforcement          │  ALLOW / WARN / REDACT / BLOCK
@@ -29,7 +36,8 @@ User ──► Frontend (React/Vite :5173)
          Groq LLM  (llama-3.3-70b-versatile)
               │
     ┌─────────┴──────────────────────┐
-    │     Response Inspection         │  DistilBERT on LLM output
+    │     Response Inspection         │  Entity index on LLM output;
+    │                                 │  leaked spans masked, not just flagged
     └─────────┬──────────────────────┘
               ▼
          Audit Log + Analytics Dashboard
@@ -44,7 +52,7 @@ User ──► Frontend (React/Vite :5173)
 | Frontend | React 18, TypeScript, Vite, TailwindCSS, Recharts |
 | Backend | FastAPI, Python 3.12, Uvicorn |
 | Database | SQLite (via SQLAlchemy 2.0 async) |
-| ML Classifier | DistilBERT (`distilbert-base-uncased`, fine-tuned, 66M params) |
+| Entity extraction | Regex (identifiers, Luhn-checked cards) + NER (`dslim/distilbert-NER`, upload-time only) |
 | Embeddings | SentenceTransformers (`all-MiniLM-L6-v2`) |
 | Vector Search | FAISS (`faiss-cpu`) |
 | LLM Provider | Groq API (`llama-3.3-70b-versatile`) |
@@ -62,7 +70,7 @@ Mini Enquino/
 │   ├── app/
 │   │   ├── api/v1/endpoints/    # auth, prompts, analytics, policies, audit, knowledge-shield
 │   │   ├── core/                # config, database, security
-│   │   ├── governance/          # ml_classifier, inspector, risk_scorer, response_inspector
+│   │   ├── governance/          # entities, inspector, risk_scorer, response_inspector
 │   │   ├── embeddings/          # encoder, knowledge_shield (FAISS)
 │   │   ├── models/              # SQLAlchemy ORM models
 │   │   ├── schemas/             # Pydantic request/response schemas
@@ -70,7 +78,7 @@ Mini Enquino/
 │   ├── seed_data/seed.py        # Demo users, prompt history, policy rules, protected docs
 │   ├── tests/                   # pytest suite (app/core/cache.py)
 │   ├── main.py                  # FastAPI app entry point
-│   ├── Dockerfile               # Bakes the DistilBERT fine-tune into the image build
+│   ├── Dockerfile               # Pre-downloads NER + embedding checkpoints into the image
 │   ├── requirements.txt         # Core dependencies
 │   └── requirements-ml.txt      # PyTorch + Transformers + FAISS (not fully optional — see backend/CLAUDE.md)
 ├── frontend/
@@ -117,7 +125,7 @@ pip install -r requirements-ml.txt
 cp ../.env.example .env
 # Edit .env — set GROQ_API_KEY to your key
 
-# Run the API  (DistilBERT trains on first run ~3 min, cached after)
+# Run the API  (starts immediately; nothing is trained at boot)
 uvicorn main:app --host 0.0.0.0 --port 8001
 
 # In a second terminal — seed demo data
@@ -140,7 +148,7 @@ docker compose up --build
 # Frontend: http://localhost   Backend: http://localhost:8001
 ```
 
-Runs backend + frontend (nginx) + Redis together. The backend image fine-tunes DistilBERT at *build* time, so containers start in seconds instead of retraining on every boot. Set `GROQ_API_KEY` (and optionally `SECRET_KEY`) in a `.env` file at the repo root before running — `docker-compose.yml` reads it via variable substitution.
+Runs backend + frontend (nginx) + Redis together. The backend image pre-downloads the NER and embedding checkpoints at *build* time, so a cold container doesn't re-fetch ~260MB on first document upload. Set `GROQ_API_KEY` (and optionally `SECRET_KEY`) in a `.env` file at the repo root before running — `docker-compose.yml` reads it via variable substitution.
 
 ---
 
@@ -157,20 +165,36 @@ Admin unlocks: Audit Logs, Analytics, Policy Rules, Knowledge Base.
 
 ---
 
-## ML Detection Categories
+## Detection Categories
 
-The fine-tuned DistilBERT classifier runs a single forward pass and outputs confidence scores for all 6 categories simultaneously (multi-label).
+Every signal below is evidence — a regex match, an index hit, or a matched phrase — so there is no confidence score to threshold.
 
-| Category | Flag | Threshold | Base Risk Score | Example Trigger |
-|----------|------|-----------|-----------------|-----------------|
-| PII_DATA | `PII_DETECTED` | 0.38 | 50 | SSN, credit card, email |
-| PROMPT_INJECTION | `PROMPT_INJECTION` | 0.36 | 80 | "Ignore all previous instructions" |
-| SENSITIVE_DATA | `SENSITIVE_DATA` | 0.38 | 45 | "Q4 pricing strategy", API keys |
-| TOXICITY | `TOXICITY` | 0.40 | 75 | Ransomware, harmful content |
-| IP_LEAK | `IP_LEAK` | 0.36 | 40 | Model weights, training data extraction |
-| ML_HIGH_RISK | `ML_HIGH_RISK` | 0.34 | 70 | Scrape PII, bypass audit logs |
+### Confidential document leaks
 
-Risk score = `base × min(confidence / 0.55, 1.0)`. Co-occurrence of 2+ categories adds a bonus (+8 or +15).
+Uploaded documents are indexed into entities. A prompt is checked against that index, and values are normalised first, so reformatting an identifier (`492 83 7291` for `492-83-7291`) does not evade the check.
+
+| Signal | Flag | Base Risk | When it fires |
+|--------|------|-----------|---------------|
+| Identifier from a document | `CONFIDENTIAL_DOC_LEAK` | 85 | SSN, card, email, phone, reference number matched |
+| Name from a document | `CONFIDENTIAL_DOC_LEAK` | 70 | PERSON matched (NER-indexed at upload) |
+| Two weak values, same document | `CONFIDENTIAL_DOC_LEAK` | 60 | e.g. a date *and* a salary from one file |
+| Topic similarity only | `KNOWLEDGE_SHIELD_SIMILAR` | 15 | Advisory. Never blocks alone |
+
+One shared date or dollar figure is coincidence, so it warns rather than blocks; two values from the same file is not, so it does. That split is what keeps unrelated prompts from being stopped.
+
+### Prompt and response content
+
+| Signal | Flag | Base Risk | Example |
+|--------|------|-----------|---------|
+| PII (SSN, card, passport, IBAN) | `PII_DETECTED` | 50 | `492-83-7291` |
+| PII (email, phone) | `PII_DETECTED` | 30 | `dana@corp.com` |
+| Credentials | `SENSITIVE_DATA` | 45 | `sk-…`, `AKIA…`, bearer tokens |
+| Injection phrase | `PROMPT_INJECTION` | 80 | "Ignore all previous instructions" |
+| Leak in the LLM's reply | `RESPONSE_DOC_LEAK` / `RESPONSE_PII_LEAK` / `RESPONSE_SECRET_LEAK` | — | Masked before it reaches the caller |
+
+Co-occurrence of 2+ signals adds a bonus (+8 or +15). Redaction masks the matched span only, so `"Dana's SSN is 492-83-7291 and the invoice was $4,000"` keeps the invoice figure.
+
+**Not detected:** toxicity, and injection phrased as a paraphrase rather than one of the listed openers. A word list is trivially evaded and false-positives on ordinary words, so it was left out rather than faked. If either matters, a hosted moderation endpoint is the right addition — the `openai` package is already a dependency.
 
 Risk levels: `LOW` (<30) · `MEDIUM` (30–59) · `HIGH` (60–79) · `CRITICAL` (≥80)
 
