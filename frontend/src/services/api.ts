@@ -73,6 +73,15 @@ export const knowledgeShieldApi = {
   listDocs: () => api.get('/knowledge-shield/documents'),
   addDoc: (body: { name: string; content: string; category?: string }) =>
     api.post('/knowledge-shield/documents', body),
+  // Multipart, so Content-Type is left to the browser: it has to set the
+  // multipart boundary itself, and an explicit header would omit it.
+  uploadDoc: (file: File, name: string, category: string) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('name', name)
+    body.append('category', category)
+    return api.post('/knowledge-shield/documents/upload', body)
+  },
   deleteDoc: (id: string) => api.delete(`/knowledge-shield/documents/${id}`),
   status: () => api.get('/knowledge-shield/status'),
 }

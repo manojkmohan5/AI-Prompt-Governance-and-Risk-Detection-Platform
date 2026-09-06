@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.embeddings import knowledge_shield
 from app.models.confidential_doc import ConfidentialDocument
 from app.schemas.prompt import ConfidentialDocCreate, ConfidentialDocOut
+from app.services import document_text
 
 router = APIRouter(prefix="/knowledge-shield", tags=["knowledge-shield"])
 
@@ -34,6 +35,41 @@ async def add_document(
     db.add(doc)
     await db.flush()
     # Rebuild FAISS index with new document
+    await knowledge_shield.rebuild()
+    return ConfidentialDocOut.model_validate(doc)
+
+
+@router.post("/documents/upload", response_model=ConfidentialDocOut, status_code=201)
+async def upload_document(
+    file: UploadFile = File(...),
+    name: str | None = Form(None),
+    category: str = Form("general"),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    """
+    Add a protected document from a file instead of pasted text.
+
+    Admin only, like every route on this router — an employee cannot add to or
+    read the protected set. The extracted text is stored and indexed exactly as
+    a pasted document is: this is a second way in, not a second code path.
+    """
+    data = await file.read()
+    filename = file.filename or "upload"
+    try:
+        content = document_text.extract(filename, file.content_type or "", data)
+    except document_text.ExtractionError as e:
+        # The message names the actual problem (scanned PDF, legacy .doc, too
+        # large) so the admin knows what to do with the file they picked.
+        raise HTTPException(status_code=e.status, detail=e.detail)
+
+    doc = ConfidentialDocument(
+        name=(name or "").strip() or filename.rsplit(".", 1)[0][:300],
+        content=content,
+        category=category,
+    )
+    db.add(doc)
+    await db.flush()
     await knowledge_shield.rebuild()
     return ConfidentialDocOut.model_validate(doc)
 

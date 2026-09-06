@@ -1,0 +1,6 @@
+# Sample protected documents are fixtures parsed byte-for-byte by pypdf and
+# python-docx. Without this, git's autocrlf mangles a PDF whose bytes happen to
+# look text-like, and it fails to parse for anyone who clones on another
+# platform — silently, as an extraction error rather than a diff.
+*.pdf  binary
+*.docx binary

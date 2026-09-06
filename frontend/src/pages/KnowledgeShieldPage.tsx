@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { knowledgeShieldApi } from '../services/api'
 import type { ConfidentialDoc } from '../types'
-import { BookLock, Plus, Trash2, CheckCircle, XCircle, RefreshCw, ChevronDown } from 'lucide-react'
+import { BookLock, Plus, Trash2, CheckCircle, XCircle, RefreshCw, ChevronDown, Upload, FileText, X } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 
 interface ShieldStatus {
@@ -18,8 +18,10 @@ export default function KnowledgeShieldPage() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ name: '', content: '', category: 'general' })
+  const [file, setFile] = useState<File | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [formError, setFormError] = useState('')
 
   const refresh = async () => {
     setLoading(true)
@@ -39,17 +41,41 @@ export default function KnowledgeShieldPage() {
 
   useEffect(() => { refresh() }, [])
 
+  const resetForm = () => {
+    setForm({ name: '', content: '', category: 'general' })
+    setFile(null)
+    setFormError('')
+  }
+
   const addDoc = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.name.trim() || !form.content.trim()) return
+    setFormError('')
+
+    // A file replaces the pasted text; the name is optional for an upload
+    // because the filename stands in for it.
+    if (!file && !form.content.trim()) {
+      setFormError('Choose a file to upload, or paste the document text below.')
+      return
+    }
+    if (!file && !form.name.trim()) {
+      setFormError('Enter a document name. It identifies the document in audit records.')
+      return
+    }
+
     setSubmitting(true)
     try {
-      await knowledgeShieldApi.addDoc(form)
-      setForm({ name: '', content: '', category: 'general' })
+      if (file) {
+        await knowledgeShieldApi.uploadDoc(file, form.name, form.category)
+      } else {
+        await knowledgeShieldApi.addDoc(form)
+      }
+      resetForm()
       setShowForm(false)
       await refresh()
-    } catch {
-      setError('Failed to add document.')
+    } catch (err: any) {
+      // The API explains what is wrong with the specific file (scanned PDF,
+      // wrong type, too large); a generic message would throw that away.
+      setFormError(err?.response?.data?.detail || 'Failed to add document. Try again.')
     } finally {
       setSubmitting(false)
     }
@@ -126,28 +152,112 @@ export default function KnowledgeShieldPage() {
         {showForm && (
           <form onSubmit={addDoc} className="mb-6 p-4 bg-surface-2 rounded-xl border border-surface-3 space-y-3">
             <h3 className="text-sm font-medium text-white">Add Confidential Document</h3>
-            <input
-              className="input"
-              placeholder="Document name (e.g. Q4 Pricing Strategy)"
-              value={form.name}
-              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              required
-            />
-            <select className="input" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
-              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <textarea
-              className="input min-h-[120px] font-mono text-xs"
-              placeholder="Paste the confidential document content here. It will be converted to embeddings for semantic matching."
-              value={form.content}
-              onChange={e => setForm(f => ({ ...f, content: e.target.value }))}
-              required
-            />
+
+            <div>
+              <label htmlFor="doc-file" className="block text-xs font-medium text-gray-300 mb-1.5">
+                Upload a file
+              </label>
+              {file ? (
+                <div className="flex items-center gap-2 px-3 py-2 bg-surface-3 rounded-lg border border-surface-3">
+                  <FileText size={15} className="text-purple-400 flex-shrink-0" aria-hidden="true" />
+                  <span className="text-sm text-white truncate flex-1">{file.name}</span>
+                  <span className="text-xs text-gray-500 flex-shrink-0">
+                    {(file.size / 1024).toFixed(0)} KB
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setFile(null)}
+                    className="text-gray-400 hover:text-white focus:text-white p-0.5 rounded focus:outline-none focus:ring-2 focus:ring-brand"
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    <X size={15} aria-hidden="true" />
+                  </button>
+                </div>
+              ) : (
+                <input
+                  id="doc-file"
+                  type="file"
+                  accept=".pdf,.docx,.txt,.md,.csv,.log,.json"
+                  aria-describedby="doc-file-hint"
+                  onChange={e => {
+                    const chosen = e.target.files?.[0] ?? null
+                    setFile(chosen)
+                    setFormError('')
+                  }}
+                  className="input text-sm file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:bg-brand file:text-white hover:file:cursor-pointer"
+                />
+              )}
+              <p id="doc-file-hint" className="text-xs text-gray-500 mt-1">
+                PDF, Word .docx, CSV, Markdown or text — up to 10MB. Scanned or image-only PDFs need OCR first.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3" role="separator" aria-label="or paste text instead">
+              <span className="h-px bg-surface-3 flex-1" />
+              <span className="text-xs text-gray-500 uppercase tracking-wide">or paste text</span>
+              <span className="h-px bg-surface-3 flex-1" />
+            </div>
+
+            <div>
+              <label htmlFor="doc-name" className="block text-xs font-medium text-gray-300 mb-1.5">
+                Document name {file && <span className="text-gray-500">(optional — defaults to the filename)</span>}
+              </label>
+              <input
+                id="doc-name"
+                className="input"
+                placeholder="e.g. Q4 Pricing Strategy"
+                value={form.name}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+
+            <div>
+              <label htmlFor="doc-category" className="block text-xs font-medium text-gray-300 mb-1.5">
+                Category
+              </label>
+              <select
+                id="doc-category"
+                className="input"
+                value={form.category}
+                onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+              >
+                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="doc-content" className="block text-xs font-medium text-gray-300 mb-1.5">
+                Document text {file && <span className="text-gray-500">(ignored — the file is used)</span>}
+              </label>
+              <textarea
+                id="doc-content"
+                className="input min-h-[120px] font-mono text-xs disabled:opacity-40"
+                placeholder="Paste the confidential document content here."
+                value={form.content}
+                disabled={!!file}
+                onChange={e => setForm(f => ({ ...f, content: e.target.value }))}
+              />
+            </div>
+
+            {formError && (
+              <p role="alert" className="flex items-start gap-2 text-sm text-red-400">
+                <XCircle size={15} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
+                <span>{formError}</span>
+              </p>
+            )}
+
             <div className="flex gap-2">
-              <button type="submit" disabled={submitting} className="btn-primary text-sm">
-                {submitting ? 'Indexing...' : 'Add & Index'}
+              <button type="submit" disabled={submitting} className="btn-primary text-sm flex items-center gap-2">
+                {file && <Upload size={14} aria-hidden="true" />}
+                {submitting ? 'Extracting & indexing...' : file ? 'Upload & Index' : 'Add & Index'}
               </button>
-              <button type="button" onClick={() => setShowForm(false)} className="btn-ghost text-sm">Cancel</button>
+              <button
+                type="button"
+                onClick={() => { resetForm(); setShowForm(false) }}
+                className="btn-ghost text-sm"
+              >
+                Cancel
+              </button>
             </div>
           </form>
         )}
