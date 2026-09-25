@@ -12,7 +12,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-import app.models  # noqa: F401
 from app.core import database
 from app.embeddings import encoder
 from app.embeddings import knowledge_shield as ks

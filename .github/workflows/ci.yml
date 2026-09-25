@@ -1,10 +1,17 @@
 name: CI
 
 on:
+  # Every push, not just main: a feature branch used to be pushed without any
+  # check running, so its first CI result arrived only once a PR was open.
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
     branches: [main]
+
+# A newer push supersedes the run still going for the same branch or PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend:
@@ -45,10 +52,15 @@ jobs:
       - name: Compile check (catches syntax errors)
         run: python -m compileall -q app main.py
 
+      # Unused imports, undefined names, redefinitions. pyflakes only - no
+      # style rules - so it fails on things that are likely bugs, not taste.
+      - name: Lint (pyflakes)
+        run: python -m pyflakes app main.py tests seed_data conftest.py
+
       - name: Import check (catches broken imports / route wiring)
         run: python -c "import main"
 
-      - name: Test cache layer (real Redis service, default REDIS_URL matches it)
+      - name: Test suite (real Redis service for the cache round-trip tests)
         run: pytest -v
 
   frontend:
@@ -129,6 +141,16 @@ jobs:
           echo "verifying nginx's /api proxy actually reaches the backend..."
           curl -sf http://localhost:8080/api/docs >/dev/null \
             || (echo "frontend -> backend /api reverse proxy did not work" && exit 1)
+
+          # nginx refuses bodies over 1MB unless configured, which silently broke
+          # every document upload over 1MB in this stack. A 2MB upload with no
+          # token must reach the app (401), not be stopped by nginx (413).
+          echo "verifying nginx passes a 2MB upload through to the app..."
+          head -c 2097152 /dev/zero > two-mb.txt
+          code=$(curl -s -o /dev/null -w '%{http_code}' -F "file=@two-mb.txt" \
+            http://localhost:8080/api/v1/knowledge-shield/documents/upload)
+          [ "$code" = "401" ] \
+            || (echo "expected 401 from the app, got $code - is nginx's body limit back to 1MB?" && exit 1)
 
       # The Python job can't run these: it deliberately skips the ML packages,
       # and every other test stubs the models off. That is how an NER setting

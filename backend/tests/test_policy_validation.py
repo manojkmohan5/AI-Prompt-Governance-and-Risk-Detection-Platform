@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-import app.models  # noqa: F401  (registers every table on Base)
 from app.api.deps import get_current_user
 from app.api.v1.endpoints import policies
 from app.core import database
