@@ -108,7 +108,7 @@ AI-Prompt-Governance-and-Risk-Detection-Platform/
 │   ├── Dockerfile               # Multi-stage build -> nginx
 │   └── nginx.conf               # Serves the SPA, proxies /api to the backend
 ├── sample_documents/            # Fictional client records, one per upload format
-├── .github/workflows/ci.yml     # Backend + frontend checks, Docker build, smoke + real-model tests
+├── .github/workflows/ci.yml     # One pipeline: backend + frontend checks, Docker build, smoke + real-model tests
 ├── docker-compose.yml           # Full stack: backend + frontend + Redis
 ├── .env.example                 # Environment variable template
 └── README.md
@@ -283,7 +283,7 @@ pytest -v
 - `python -m pyflakes app main.py tests seed_data conftest.py` is the lint gate CI applies.
 - `cd frontend && npm run build` type-checks and builds the frontend.
 
-CI (`.github/workflows/ci.yml`) runs all of the above on every push and every pull request to `main`, plus a Docker build and smoke test — including a 2MB upload through nginx and the real-model tests inside the built image. `main` accepts changes only through a pull request whose checks pass.
+CI (`.github/workflows/ci.yml`) is one pipeline with one job, **Build and test**, run once on every push. Its steps, in order: backend install, compile check, lint, import check and tests (with a real Redis); frontend install and build; then the Docker images are built and the whole stack is smoke-tested — including a 2MB upload through nginx — and the real-model tests run inside the built image. `main` accepts changes only through a pull request on which Build and test has passed.
 
 ---
 

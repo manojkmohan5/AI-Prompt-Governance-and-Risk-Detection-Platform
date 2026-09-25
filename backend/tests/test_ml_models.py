@@ -8,8 +8,8 @@ Raghavan" as the fragments "P" + "##riya Raghavan", the index stored
 class of failure — the model loads fine but its output is unusable — fails
 loudly instead.
 
-Skipped when the ML packages are not installed (CI's plain Python job). CI's
-Docker job runs this file inside the built image, against the model baked into
+Skipped when the ML packages are not installed (CI's backend test step). CI's
+Docker steps run this file inside the built image, against the model baked into
 it, so the check covers what actually ships.
 """
 import asyncio

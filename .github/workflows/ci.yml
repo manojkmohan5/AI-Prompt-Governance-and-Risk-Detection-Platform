@@ -1,26 +1,29 @@
 name: CI
 
+# One pipeline, one job, one run per push. Every check the project has lives
+# in it as a step, so a change shows a single result - the one main's branch
+# protection requires ("Build and test").
+#
+# Every push runs it: feature branches, PR branches and main. There is
+# deliberately no pull_request trigger - for a branch in this repository it
+# ran the same checks a second time on every push, and the PR shows the push
+# run's result anyway (checks attach to the commit).
 on:
-  # Every push, not just main: a feature branch used to be pushed without any
-  # check running, so its first CI result arrived only once a PR was open.
   push:
     branches: ["**"]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
-# A newer push supersedes the run still going for the same branch or PR.
+# A newer push to the same branch cancels the run still going for it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  backend:
-    name: Backend (Python)
+  ci:
+    name: Build and test
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     services:
+      # For the cache round-trip tests, at the default REDIS_URL.
       redis:
         image: redis:7-alpine
         ports:
@@ -33,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ── Backend ────────────────────────────────────────────────────────────
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -41,58 +45,51 @@ jobs:
             backend/requirements.txt
             backend/requirements-dev.txt
 
-      - name: Install core + dev dependencies
+      # requirements-ml.txt (torch/transformers/faiss) is not installed here:
+      # it is large, every module that needs it imports it lazily, and
+      # detection is regex plus lookups. The real models are tested in the
+      # built image further down.
+      - name: "Backend: install"
+        working-directory: backend
         run: pip install -r requirements.txt -r requirements-dev.txt
-        # requirements-ml.txt (torch/transformers/faiss) is intentionally not
-        # installed here — it's a large, slow install, and every module that
-        # needs those packages imports them lazily inside functions. Detection
-        # itself is regex and dict lookups, so the leak-detection tests run
-        # fully without them.
 
-      - name: Compile check (catches syntax errors)
+      - name: "Backend: compile check"
+        working-directory: backend
         run: python -m compileall -q app main.py
 
       # Unused imports, undefined names, redefinitions. pyflakes only - no
-      # style rules - so it fails on things that are likely bugs, not taste.
-      - name: Lint (pyflakes)
+      # style rules - so it fails on likely bugs, not taste.
+      - name: "Backend: lint (pyflakes)"
+        working-directory: backend
         run: python -m pyflakes app main.py tests seed_data conftest.py
 
-      - name: Import check (catches broken imports / route wiring)
+      - name: "Backend: import check (route wiring)"
+        working-directory: backend
         run: python -c "import main"
 
-      - name: Test suite (real Redis service for the cache round-trip tests)
+      - name: "Backend: tests"
+        working-directory: backend
         run: pytest -v
 
-  frontend:
-    name: Frontend (Vite build)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-
+      # ── Frontend ───────────────────────────────────────────────────────────
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install dependencies
+      - name: "Frontend: install"
+        working-directory: frontend
         run: npm ci
 
-      - name: Build (tsc -b && vite build)
+      - name: "Frontend: type-check and build"
+        working-directory: frontend
         run: npm run build
 
-  docker-build:
-    name: Docker build + smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
+      # ── Docker ─────────────────────────────────────────────────────────────
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build backend image (includes the pre-downloaded model layer)
+      - name: "Docker: build backend image (includes the model layer)"
         uses: docker/build-push-action@v6
         with:
           context: ./backend
@@ -101,7 +98,7 @@ jobs:
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
-      - name: Build frontend image
+      - name: "Docker: build frontend image"
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
@@ -110,7 +107,7 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
-      - name: Smoke test the built images
+      - name: "Docker: smoke test the full stack"
         run: |
           set -e
           docker network create governance-ci-net
@@ -146,18 +143,18 @@ jobs:
           # every document upload over 1MB in this stack. A 2MB upload with no
           # token must reach the app (401), not be stopped by nginx (413).
           echo "verifying nginx passes a 2MB upload through to the app..."
-          head -c 2097152 /dev/zero > two-mb.txt
-          code=$(curl -s -o /dev/null -w '%{http_code}' -F "file=@two-mb.txt" \
+          head -c 2097152 /dev/zero > "$RUNNER_TEMP/two-mb.txt"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -F "file=@$RUNNER_TEMP/two-mb.txt" \
             http://localhost:8080/api/v1/knowledge-shield/documents/upload)
           [ "$code" = "401" ] \
             || (echo "expected 401 from the app, got $code - is nginx's body limit back to 1MB?" && exit 1)
 
-      # The Python job can't run these: it deliberately skips the ML packages,
-      # and every other test stubs the models off. That is how an NER setting
-      # that fragmented names ("P" + "##riya Raghavan") shipped unnoticed. Run
-      # them here, inside the built image, against the model actually baked
-      # into it. The image excludes tests/ (.dockerignore), so mount them in.
-      - name: Run real-model tests inside the backend image
+      # The backend steps above skip the ML packages, and every other test
+      # stubs the models off - which is how an NER setting that fragmented
+      # names ("P" + "##riya Raghavan") shipped unnoticed. These run the real
+      # models, inside the built image, against the checkpoints baked into it.
+      # The image excludes tests/ (.dockerignore), so they are mounted in.
+      - name: "Docker: real-model tests inside the backend image"
         run: |
           docker run --rm \
             -v "$PWD/backend/tests:/app/tests:ro" \
