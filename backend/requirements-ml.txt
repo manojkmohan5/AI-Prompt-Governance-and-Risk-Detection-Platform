@@ -1,7 +1,9 @@
 # ML dependencies. Install with: pip install -r requirements-ml.txt
 #
-# Genuinely optional now. Nothing on the per-prompt path needs a model:
-# detection is regex plus dict lookups against the document entity index.
+# Genuinely optional now. Nothing that can block or redact a prompt needs a
+# model: detection is regex plus lookups against the document entity index.
+# When installed, MiniLM does embed every prompt for the advisory similarity
+# signal, which can only warn.
 #
 # These packages improve Knowledge Shield coverage rather than enable it:
 #   sentence-transformers + faiss-cpu → the advisory topic-similarity signal

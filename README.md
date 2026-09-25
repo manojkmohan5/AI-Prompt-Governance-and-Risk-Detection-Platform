@@ -12,7 +12,7 @@ The core job is keeping confidential document content out of the LLM. Each uploa
 
 Semantic similarity is kept as a second, deliberately weaker signal. It only ever says "this prompt is about the same subject as a protected document", which is true of plenty of harmless prompts, so on its own it warns and never blocks.
 
-Nothing on the per-prompt path runs a model. Detection is regex and dict lookups (~1ms); NER runs only at document upload.
+Nothing that can block or redact a prompt uses a model: identifiers are regex, and document matching is a dictionary lookup. One model does run on every prompt when `sentence-transformers` is installed — MiniLM embeds it for the advisory similarity signal, about 20 ms — but that signal can only warn. NER runs only when documents are indexed, never on prompts: measured on real prompts it finds nothing in lowercase text such as "what is dana reyes salary", whereas the index lookup is case-insensitive.
 
 ```
 User ──► Frontend (React/Vite :5173)

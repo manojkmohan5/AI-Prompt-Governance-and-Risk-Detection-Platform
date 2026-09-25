@@ -6,19 +6,19 @@ Guidance for Claude Code when working inside `backend/`. See the [root CLAUDE.md
 
 ```bash
 python -m venv venv && source venv/bin/activate   # macOS/Linux
-pip install -r requirements.txt -r requirements-ml.txt   # both required — see note below
+pip install -r requirements.txt -r requirements-ml.txt   # ML file optional — see note below
 cp ../.env.example .env                              # then set GROQ_API_KEY
 
 uvicorn main:app --host 0.0.0.0 --port 8001          # run API (starts immediately; nothing is trained at boot)
 python -m seed_data.seed                             # seed demo users, policies, prompt history, protected docs
 ```
 
-`requirements-ml.txt` is genuinely optional. No model runs on the per-prompt path — detection is regex plus dict lookups against the document entity index. Those packages widen Knowledge Shield coverage rather than enable it: `transformers` gives NER over uploaded documents (so person and organisation names get indexed), `sentence-transformers`/`faiss-cpu` give the advisory topic-similarity signal. Without them the shield still blocks leaks using regex identifiers alone. `GET /api/v1/knowledge-shield/status` reports which coverage is live via `ner_enabled` / `similarity_ready`.
+`requirements-ml.txt` is genuinely optional. Nothing that can block or redact a prompt uses a model — detection is regex plus dictionary lookups against the document entity index. One model does run per prompt when installed: MiniLM embeds the prompt for the advisory similarity signal. Those packages widen Knowledge Shield coverage rather than enable it: `transformers` gives NER over uploaded documents (so person and organisation names get indexed), `sentence-transformers`/`faiss-cpu` give the advisory topic-similarity signal. Without them the shield still blocks leaks using regex identifiers alone — but names of people and companies go unprotected, and the Knowledge Shield page says so. `GET /api/v1/knowledge-shield/status` reports which coverage is live via `ner_enabled` / `similarity_ready`.
 
 ```bash
-cd backend && pytest -v   # tests/ covers app/core/cache.py and leak detection
+cd backend && pytest -v
 ```
-`tests/test_leak_detection.py` is deliberately hermetic — NER is stubbed off and no embedding model loads, so it runs offline and exercises the regex-only degraded path.
+Most tests are deliberately hermetic — NER is stubbed off and no embedding model loads, so they run offline. That is also how an NER setting that returned names as word-piece fragments ("P" + "##riya Raghavan") shipped unnoticed, so `tests/test_ml_models.py` runs the real models: it skips when the ML packages are absent, and CI's Docker job runs it inside the built image against the model baked into it. Other files worth knowing: `test_admin_only.py` checks every Knowledge Shield route refuses employees, `test_response_inspection.py` checks answers are masked before delivery, `test_policy_migration.py` checks old databases are repaired on startup. `test_cache.py`'s round-trip tests need a running Redis and fail without one; CI provides it.
 No linter is configured for the backend.
 
 ### Docker
@@ -66,6 +66,7 @@ When touching detection behavior, the regex patterns and normalisation rules liv
 - `app/api/v1/endpoints/` — one router module per resource (auth, prompts, analytics, policies, audit, knowledge_shield), wired together in `app/api/v1/router.py`.
 - `app/api/deps.py` — JWT bearer auth; `get_current_user` and `require_admin` are the two dependencies gating routes. Roles are just `admin` / `employee` (`app/models/user.py`).
 - `app/core/database.py` — async SQLAlchemy 2.0, SQLite via `aiosqlite`. No Alembic: schema changes are applied via a manual `_NEW_COLUMNS` / `ALTER TABLE` migration list in `main.py`'s `_migrate()`, run on every startup. Add new nullable columns there rather than introducing a migration framework.
-- `app/embeddings/` — `encoder.py` (SentenceTransformers) and `knowledge_shield.py` (FAISS) both import ML dependencies lazily and degrade gracefully (Knowledge Shield goes to "standby"/inactive) if `requirements-ml.txt` isn't installed.
+- `app/embeddings/` — `encoder.py` (SentenceTransformers) and `knowledge_shield.py` (entity index + FAISS) import ML dependencies lazily. Without `requirements-ml.txt` only the similarity signal and name detection switch off; document matching on identifiers keeps blocking leaks.
+- `main.py` — startup runs non-destructive migrations: `_migrate` adds columns, `_migrate_policy_rules` repairs rules in databases seeded before the classifier was removed (rekeys the old `KNOWLEDGE_SHIELD` flag to `CONFIDENTIAL_DOC_LEAK`, retires rules on flags nothing raises). Seeding skips an existing database, so this is the only thing that updates one.
 - Settings (`app/core/config.py`) are `pydantic-settings`-driven from `.env`; note `KNOWLEDGE_SHIELD_THRESHOLD` defaults differ between `config.py` (0.55) and `.env.example` (0.75) — the `.env` value wins once present.
 - `app/core/cache.py` — optional Redis cache for the two transformer forward passes (classifier `classify()`, Knowledge Shield `check_similarity()`). Degrades to a no-op if Redis is unreachable, same pattern as the ML deps. Cache keys embed a fingerprint of the model/index (`classifier_fingerprint()` / `knowledge_shield_fingerprint()`) so a retrain or a Knowledge Shield document change invalidates old entries automatically — don't key on text alone.
