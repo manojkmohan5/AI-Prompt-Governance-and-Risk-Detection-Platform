@@ -79,13 +79,24 @@ class DocMatch:
     """One confidential value found in a prompt, and where it came from."""
     type: str
     value: str
-    doc_name: str
+    doc_name: str                   # first document holding the value, for display
     start: int
     end: int
+    # Every document holding the value. A value often appears in several (a
+    # client's name in the contract, the payment vault and the support log),
+    # and corroboration must be judged per document: crediting a match to its
+    # first document alone meant two values from the same memo could land in
+    # different documents and never confirm.
+    doc_names: Tuple[str, ...] = ()
 
     @property
     def conclusive(self) -> bool:
         return self.type in _HIGH_SPECIFICITY
+
+
+def _docs(occurrences: List["DocEntity"]) -> Tuple[str, ...]:
+    """Distinct document names, in index order."""
+    return tuple(dict.fromkeys(o.doc_name for o in occurrences))
 
 
 @dataclass
@@ -98,7 +109,7 @@ class ShieldResult:
 
     @property
     def documents(self) -> List[str]:
-        return sorted({m.doc_name for m in self.matches})
+        return sorted({d for m in self.matches for d in (m.doc_names or (m.doc_name,))})
 
 
 # ── Index construction ─────────────────────────────────────────────────────────
@@ -241,12 +252,12 @@ def match_entities(prompt_text: str) -> List[DocMatch]:
 
     # 1. Identifiers present verbatim in the prompt.
     for e in ent.extract_identifiers(prompt_text):
-        for occurrence in _entity_index.get(e.norm, []):
-            if _claim(e.start, e.end):
-                matches.append(DocMatch(
-                    occurrence.type, e.value, occurrence.doc_name, e.start, e.end,
-                ))
-            break
+        occurrences = _entity_index.get(e.norm)
+        if occurrences and _claim(e.start, e.end):
+            matches.append(DocMatch(
+                occurrences[0].type, e.value, occurrences[0].doc_name, e.start, e.end,
+                _docs(occurrences),
+            ))
 
     # 2. Any other alphanumeric run that is in the index verbatim. The index
     #    holds only values taken from protected documents, so checking loose
@@ -264,25 +275,23 @@ def match_entities(prompt_text: str) -> List[DocMatch]:
                 continue
             matches.append(DocMatch(
                 occurrences[0].type, m.group(0), occurrences[0].doc_name,
-                m.start(), m.end(),
+                m.start(), m.end(), _docs(occurrences),
             ))
 
     # 3. Names/orgs, via n-gram intersection. Longest phrases first so
     #    "Dana Reyes" is preferred over a bare "Dana".
     grams = ent.ngrams(prompt_text, max_n=_max_phrase_words)
     for phrase in sorted(grams, key=lambda p: -len(p.split())):
-        occurrences = _entity_index.get(phrase)
-        if not occurrences:
+        # Only name-type occurrences: an identifier with the same normalised
+        # text was already handled above with a real span.
+        names = [o for o in _entity_index.get(phrase, []) if o.type in ent.PHRASE_TYPES]
+        if not names:
             continue
-        occurrence = next(
-            (o for o in occurrences if o.type in ent.PHRASE_TYPES), occurrences[0]
-        )
-        if occurrence.type not in ent.PHRASE_TYPES:
-            continue        # identifier already handled above with a real span
         start, end = grams[phrase]
         if _claim(start, end):
             matches.append(DocMatch(
-                occurrence.type, prompt_text[start:end], occurrence.doc_name, start, end,
+                names[0].type, prompt_text[start:end], names[0].doc_name, start, end,
+                _docs(names),
             ))
 
     return sorted(matches, key=lambda m: m.start)
@@ -332,17 +341,24 @@ def confirm_leak(matches: List[DocMatch]) -> bool:
     """
     Decide whether the matches amount to a leak.
 
-    One conclusive match is enough. Otherwise two weak matches from the SAME
-    document are required — a single shared date or dollar figure is the kind
-    of coincidence that would otherwise stop people doing ordinary work.
+    One conclusive match is enough. Otherwise two DIFFERENT weak values that
+    both appear in the SAME document are required — a single shared date or
+    dollar figure is the kind of coincidence that would otherwise stop people
+    doing ordinary work.
+
+    Judged per document over every document holding each value, and counted
+    by distinct normalised value, not by match: typing one date twice is still
+    one piece of evidence, and "$84M" next to "$84,000,000" is one amount.
     """
     if any(m.conclusive for m in matches):
         return True
-    per_doc: Dict[str, int] = {}
+    per_doc: Dict[str, set] = {}
     for m in matches:
         if m.type in _LOW_SPECIFICITY:
-            per_doc[m.doc_name] = per_doc.get(m.doc_name, 0) + 1
-    return any(count >= 2 for count in per_doc.values())
+            value = ent.normalise(m.type, m.value)
+            for doc in (m.doc_names or (m.doc_name,)):
+                per_doc.setdefault(doc, set()).add(value)
+    return any(len(values) >= 2 for values in per_doc.values())
 
 
 async def check_prompt(prompt_text: str) -> ShieldResult:

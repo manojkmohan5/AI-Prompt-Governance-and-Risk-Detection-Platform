@@ -149,7 +149,7 @@ async def process(
             "entities":         [{"type": e.type, "value": e.value} for e in inspection.entities],
             "injection_spans":  inspection.injection_spans,
             "doc_matches":      [
-                {"type": m.type, "value": m.value, "document": m.doc_name}
+                {"type": m.type, "value": m.value, "documents": list(m.doc_names or (m.doc_name,))}
                 for m in shield.matches
             ],
             "shield_similarity": round(ks_score, 4) if ks_score is not None else None,
@@ -185,7 +185,7 @@ async def process(
                     "ml_category": ml_category,
                     "documents":   shield.documents,
                     "doc_matches": [
-                        {"type": m.type, "value": m.value, "document": m.doc_name}
+                        {"type": m.type, "value": m.value, "documents": list(m.doc_names or (m.doc_name,))}
                         for m in shield.matches
                     ],
                 },
