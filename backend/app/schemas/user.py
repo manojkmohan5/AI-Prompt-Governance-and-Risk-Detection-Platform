@@ -2,14 +2,17 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
+
+from app.models.user import UserRole
 
 
 class UserCreate(BaseModel):
     email: EmailStr
-    username: str
-    password: str
-    role: str = "employee"
+    username: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=8)
+    # An enum, so an unknown role is a 422 instead of a row that breaks logins.
+    role: UserRole = UserRole.EMPLOYEE
     department: Optional[str] = None
 
 

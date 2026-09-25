@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # application so unrelated code changes don't invalidate this expensive layer.
 RUN python -c "\
 from transformers import pipeline; \
-pipeline('ner', model='dslim/distilbert-NER', aggregation_strategy='simple'); \
+pipeline('ner', model='dslim/distilbert-NER', aggregation_strategy='first'); \
 from sentence_transformers import SentenceTransformer; \
 SentenceTransformer('all-MiniLM-L6-v2')"
 

@@ -18,13 +18,14 @@ per-prompt cost to regex plus set lookups.
 """
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Dict, Iterable, List, Optional, Tuple
 
 # ── Entity types ───────────────────────────────────────────────────────────────
 # Identifier types are extracted by regex from any text.
 IDENTIFIER_TYPES = frozenset({
     "SSN", "CREDIT_CARD", "EMAIL", "PHONE", "IBAN", "PASSPORT",
-    "API_KEY", "DATE", "MONEY", "REF_NUMBER",
+    "API_KEY", "PASSWORD", "PRIVATE_KEY", "TOKEN", "DATE", "MONEY", "REF_NUMBER",
 })
 # Phrase types come from NER at document-ingest time and are matched in prompts
 # by n-gram intersection rather than by regex.
@@ -32,6 +33,11 @@ PHRASE_TYPES = frozenset({"PERSON", "ORG", "LOC"})
 
 # Types that identify a specific individual (drives the PII flag / compliance tags).
 PII_TYPES = frozenset({"SSN", "CREDIT_CARD", "EMAIL", "PHONE", "PASSPORT", "IBAN", "PERSON"})
+
+# Credentials. Raise SENSITIVE_DATA, and are masked whenever a prompt is
+# redacted and whenever they appear in an answer - a key typed into a prompt
+# must not reach the LLM even when the policy only asks for redaction.
+SECRET_TYPES = frozenset({"API_KEY", "PASSWORD", "PRIVATE_KEY", "TOKEN"})
 
 
 @dataclass(frozen=True)
@@ -47,11 +53,32 @@ class Entity:
 # Order matters: on an overlap the earlier (more specific) pattern wins, so a
 # 9-digit SSN is never re-tagged as a phone number or a reference number.
 _PATTERNS: List[Tuple[str, re.Pattern]] = [
+    # Whole PEM block; first so nothing inside it is re-labelled.
+    ("PRIVATE_KEY", re.compile(
+        r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z]+ )?PRIVATE KEY-----|\Z)")),
     ("API_KEY", re.compile(
         r"\b(?:sk-[A-Za-z0-9_-]{16,}"
         r"|AKIA[0-9A-Z]{16}"
         r"|gh[pousr]_[A-Za-z0-9]{20,}"
         r"|xox[baprs]-[A-Za-z0-9-]{10,})\b")),
+    # JSON Web Tokens, and whatever follows "Bearer" in an Authorization header.
+    ("TOKEN", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
+    ("TOKEN", re.compile(r"(?i)\bbearer\s+([A-Za-z0-9._~+/-]{20,}=*)")),
+    # A key or token assigned in code or config whose format the prefixes above
+    # don't know: api_key="...", access_token: ... . Assignment syntax only.
+    ("API_KEY", re.compile(
+        r"\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret[_-]?key)[\"']?\s*[:=]\s*[\"']?"
+        r"(?![$<{%])([^\s\"',;)]{8,})", re.I)),
+    # The password in a connection string: postgres://user:PASSWORD@host.
+    # Before EMAIL, which would otherwise read "PASSWORD@host.com" as an address.
+    ("PASSWORD", re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@/]+)@", re.I)),
+    # Assignment syntax only (password=..., pwd: ..., "password": ...), so prose
+    # such as "I forgot my password" is never flagged. The optional quote after
+    # the name covers JSON and dict keys. Values that are clearly references
+    # rather than secrets - ${VAR}, <placeholder>, %s - are skipped.
+    ("PASSWORD", re.compile(
+        r"\b(?:password|passwd|pwd|secret|client_secret)[\"']?\s*[:=]\s*[\"']?"
+        r"(?![$<{%])([^\s\"',;)]{6,})", re.I)),
     ("EMAIL", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
     ("IBAN", re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")),
     # Separator may be dash, dot or space — reformatting is the cheapest
@@ -70,7 +97,13 @@ _PATTERNS: List[Tuple[str, re.Pattern]] = [
         r"|\d{1,2}/\d{1,2}/\d{2,4}"
         r"|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}"
         r"|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?,?\s+\d{4})\b")),
-    ("MONEY", re.compile(r"(?:USD|EUR|GBP|\$|€|£)\s?\d[\d,]*(?:\.\d{1,2})?\b", re.I)),
+    # Magnitude suffixes are part of the amount: "$84M" and "$84,000,000" are
+    # the same figure, and without the suffix "$42.7M" was read as "$42". A
+    # single letter must touch the number ("$5m", never "$5 m"), so "$5 bananas"
+    # stays five dollars.
+    ("MONEY", re.compile(
+        r"(?:USD|EUR|GBP|\$|€|£)\s?\d[\d,]*(?:\.\d+)?"
+        r"(?:\s?(?:thousand|million|billion|mn|bn)|[kmb])?\b", re.I)),
     ("PHONE", re.compile(
         r"(?:\+?\d{1,3}[-. ]?)?(?:\(\d{3}\)|\b\d{3})[-. ]\d{3}[-. ]\d{4}\b")),
     # Contextual: only a reference number when a label precedes it, so bare
@@ -127,6 +160,30 @@ def _normalise_date(raw: str) -> str:
     return s.lower()
 
 
+_MAGNITUDE = {
+    "k": 10**3, "thousand": 10**3,
+    "m": 10**6, "mn": 10**6, "million": 10**6,
+    "b": 10**9, "bn": 10**9, "billion": 10**9,
+}
+
+
+def _normalise_money(raw: str) -> str:
+    """
+    Face value as a plain number, so every spelling of one amount compares equal:
+    "$84M", "$84 million", "$84,000,000" and "USD 84000000" all become 84000000.
+
+    Decimal, not float: "$42.7M" must become exactly 42700000, and a float
+    multiply can land a hair off and silently stop matching.
+    """
+    m = re.search(r"(\d[\d,]*(?:\.\d+)?)\s?([a-z]*)$", raw.strip().lower())
+    if not m:
+        return re.sub(r"[^\d.]", "", raw)
+    value = Decimal(m.group(1).replace(",", "")) * _MAGNITUDE.get(m.group(2), 1)
+    # normalize() drops trailing zeros ("185000.00" -> 185000); "f" keeps it out
+    # of exponent notation, which normalize() would otherwise produce.
+    return format(value.normalize(), "f")
+
+
 def normalise(entity_type: str, raw: str) -> str:
     """
     Canonical form used for matching a prompt against the document index.
@@ -141,8 +198,7 @@ def normalise(entity_type: str, raw: str) -> str:
     if entity_type == "EMAIL":
         return s.lower()
     if entity_type == "MONEY":
-        digits = re.sub(r"[^\d.]", "", s)
-        return digits[:-3] if digits.endswith(".00") else digits
+        return _normalise_money(s)
     if entity_type in PHRASE_TYPES:
         return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
     # Identifiers: drop separators entirely.
@@ -213,8 +269,16 @@ def ner_available() -> bool:
         try:
             from transformers import pipeline
             from app.core.config import settings
+            # "first", not "simple". The model splits uncommon names into
+            # word pieces and often tags each piece as the start of a new
+            # entity; "simple" keeps those pieces apart, so "Priya Raghavan"
+            # came back as "P" + "##riya Raghavan" and was indexed as
+            # "riya raghavan", which no prompt ever matches. "first" regroups
+            # pieces into whole words before grouping words into entities.
+            # Measured on the seeded documents: 8/13 expected names indexed
+            # with "simple", 13/13 with "first".
             _ner_pipeline = pipeline(
-                "ner", model=settings.NER_MODEL, aggregation_strategy="simple",
+                "ner", model=settings.NER_MODEL, aggregation_strategy="first",
             )
             _ner_available = True
         except Exception as e:                                   # pragma: no cover

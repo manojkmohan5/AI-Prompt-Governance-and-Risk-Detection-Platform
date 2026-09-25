@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import {
   LayoutDashboard, Terminal, Activity, AlertTriangle,
   ShieldCheck, ClipboardList, BookLock, Settings,
-  LogOut, ChevronLeft, ChevronRight, Shield, Bell
+  LogOut, ChevronLeft, ChevronRight, Shield
 } from 'lucide-react'
 
 const ADMIN_NAV = [
@@ -58,8 +58,10 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="ml-auto text-gray-500 hover:text-white transition-colors"
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed}
           >
-            {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+            {collapsed ? <ChevronRight size={14} aria-hidden="true" /> : <ChevronLeft size={14} aria-hidden="true" />}
           </button>
         </div>
 
@@ -98,13 +100,13 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                 <p className="text-xs text-white truncate">{user?.username}</p>
                 <p className="text-xs text-gray-500 truncate capitalize">{user?.role}</p>
               </div>
-              <button onClick={handleLogout} className="text-gray-500 hover:text-red-400 transition-colors">
-                <LogOut size={14} />
+              <button onClick={handleLogout} className="text-gray-500 hover:text-red-400 transition-colors" aria-label="Log out">
+                <LogOut size={14} aria-hidden="true" />
               </button>
             </div>
           ) : (
-            <button onClick={handleLogout} title="Logout" className="w-full flex justify-center text-gray-500 hover:text-red-400">
-              <LogOut size={16} />
+            <button onClick={handleLogout} title="Log out" aria-label="Log out" className="w-full flex justify-center text-gray-500 hover:text-red-400">
+              <LogOut size={16} aria-hidden="true" />
             </button>
           )}
         </div>
@@ -127,9 +129,6 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
               <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
               <span className="text-xs text-green-400 font-medium">Governance Active</span>
             </div>
-            <button className="btn-ghost p-2">
-              <Bell size={16} />
-            </button>
           </div>
         </header>
 

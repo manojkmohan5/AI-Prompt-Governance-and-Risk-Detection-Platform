@@ -33,8 +33,10 @@ async def add_document(
 ):
     doc = ConfidentialDocument(**body.model_dump())
     db.add(doc)
-    await db.flush()
-    # Rebuild FAISS index with new document
+    # Commit before rebuilding. The rebuild reads the document set through its
+    # own session, which cannot see this transaction until it commits - so
+    # rebuilding first indexed the set as it was BEFORE this change.
+    await db.commit()
     await knowledge_shield.rebuild()
     return ConfidentialDocOut.model_validate(doc)
 
@@ -54,7 +56,9 @@ async def upload_document(
     read the protected set. The extracted text is stored and indexed exactly as
     a pasted document is: this is a second way in, not a second code path.
     """
-    data = await file.read()
+    # One byte past the limit is enough to know it is too large; reading the
+    # whole file first let any upload size land in memory before being refused.
+    data = await file.read(document_text.MAX_UPLOAD_BYTES + 1)
     filename = file.filename or "upload"
     try:
         content = document_text.extract(filename, file.content_type or "", data)
@@ -69,7 +73,7 @@ async def upload_document(
         category=category,
     )
     db.add(doc)
-    await db.flush()
+    await db.commit()   # before the rebuild; see add_document
     await knowledge_shield.rebuild()
     return ConfidentialDocOut.model_validate(doc)
 
@@ -85,7 +89,7 @@ async def delete_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     await db.delete(doc)
-    await db.flush()
+    await db.commit()   # before the rebuild; see add_document
     await knowledge_shield.rebuild()
 
 

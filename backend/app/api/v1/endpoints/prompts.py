@@ -44,7 +44,7 @@ async def list_prompts(
     q = select(PromptRecord)
 
     # Non-admins see only their own prompts
-    if user.role.value == "employee":
+    if user.role.value != "admin":
         q = q.where(PromptRecord.user_id == user.id)
 
     if risk_level:
@@ -74,6 +74,10 @@ async def get_prompt(
     from fastapi import HTTPException
     result = await db.execute(select(PromptRecord).where(PromptRecord.id == prompt_id))
     record = result.scalar_one_or_none()
-    if not record:
+    # Records hold the original prompt verbatim, including ones blocked for
+    # carrying confidential data, so an employee may read only their own - the
+    # same rule the list endpoint applies. 404 rather than 403 for someone
+    # else's record: confirming a prompt exists at that ID is itself a leak.
+    if not record or (user.role.value != "admin" and record.user_id != user.id):
         raise HTTPException(status_code=404, detail="Prompt not found")
     return PromptResponse.model_validate(record)

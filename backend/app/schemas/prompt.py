@@ -2,7 +2,10 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.governance.policy_engine import POLICY_FLAGS
+from app.models.policy_rule import ActionType, ConditionType
 
 
 class PromptSubmit(BaseModel):
@@ -59,13 +62,39 @@ class PolicyRuleOut(BaseModel):
 
 
 class PolicyRuleCreate(BaseModel):
-    name: str
+    """
+    A new policy rule, validated before it can reach the database.
+
+    These were plain strings. A rule saved with a typo ("BLCOK") could not be
+    loaded back: the policy engine reads every active rule on every prompt, so
+    one bad rule failed every prompt, and GET /policies failed too - leaving no
+    way to remove it from the UI.
+    """
+    name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
-    condition_type: str
-    condition_value: str
-    action: str
-    priority: int = 0
+    condition_type: ConditionType
+    condition_value: str = ""
+    action: ActionType
+    priority: int = Field(0, ge=0, le=1000)
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def _value_fits_the_condition(self):
+        value = self.condition_value.strip()
+        if self.condition_type == ConditionType.FLAG_CONTAINS:
+            if value not in POLICY_FLAGS:
+                raise ValueError(
+                    f"'{value}' is not a flag a rule can match. Use one of: "
+                    f"{', '.join(sorted(POLICY_FLAGS))}."
+                )
+        elif self.condition_type == ConditionType.RISK_SCORE_ABOVE:
+            if not value.isdigit() or not 0 <= int(value) <= 100:
+                raise ValueError("A risk-score rule needs a whole number from 0 to 100.")
+        elif self.condition_type == ConditionType.DEPARTMENT_IS:
+            if not value:
+                raise ValueError("A department rule needs a department name.")
+        self.condition_value = value
+        return self
 
 
 class AuditLogOut(BaseModel):
