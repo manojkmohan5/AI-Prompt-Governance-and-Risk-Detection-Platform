@@ -76,6 +76,41 @@ def test_equivalent_date_spellings_normalise_together():
     assert norms == {"2024-03-01"}
 
 
+@pytest.mark.parametrize("spelling", ["$84M", "$84m", "$84 million", "$84,000,000", "USD 84000000"])
+def test_every_spelling_of_an_amount_normalises_to_its_face_value(spelling):
+    money = [e for e in ent.extract_identifiers(f"the offer was {spelling} in cash") if e.type == "MONEY"]
+    assert [e.norm for e in money] == ["84000000"]
+
+
+def test_a_suffixed_decimal_keeps_its_value():
+    # The old pattern read "$42.7M" as "$42", so an earnings figure in a
+    # protected document matched "I paid $42 for lunch".
+    money = [e for e in ent.extract_identifiers("Revenue: $42.7M (+31% YoY)") if e.type == "MONEY"]
+    assert [e.norm for e in money] == ["42700000"]
+    lunch = [e for e in ent.extract_identifiers("I paid $42 for lunch") if e.type == "MONEY"]
+    assert [e.norm for e in lunch] == ["42"]
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("That costs $5 bananas", "5"),    # a word that merely starts with b
+    ("roughly $5 m or so", "5"),       # a lone letter must touch the number
+    ("totals $185,000.00 net", "185000"),
+])
+def test_only_real_magnitude_suffixes_scale_an_amount(text, expected):
+    assert [e.norm for e in ent.extract_identifiers(text) if e.type == "MONEY"] == [expected]
+
+
+def test_an_amount_restated_with_a_suffix_matches_the_document(monkeypatch):
+    memo = FakeDoc("Deal Memo", "Indicative offer $84,000,000, exclusivity to 2026-02-13.")
+    index, longest = ks._build_entity_index([memo])
+    monkeypatch.setattr(ks, "_entity_index", index)
+    monkeypatch.setattr(ks, "_max_phrase_words", longest)
+    monkeypatch.setattr(ks, "_initialized", True)
+
+    matches = ks.match_entities("Draft a note: we are paying $84M for them")
+    assert [(m.type, m.value, m.doc_name) for m in matches] == [("MONEY", "$84M", "Deal Memo")]
+
+
 # ── Redaction ──────────────────────────────────────────────────────────────────
 def test_redaction_masks_only_the_entity_not_the_sentence():
     text = "Dana's SSN is 492-83-7291 and the invoice total was $4,000."

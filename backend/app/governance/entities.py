@@ -18,6 +18,7 @@ per-prompt cost to regex plus set lookups.
 """
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Dict, Iterable, List, Optional, Tuple
 
 # ── Entity types ───────────────────────────────────────────────────────────────
@@ -70,7 +71,13 @@ _PATTERNS: List[Tuple[str, re.Pattern]] = [
         r"|\d{1,2}/\d{1,2}/\d{2,4}"
         r"|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}"
         r"|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?,?\s+\d{4})\b")),
-    ("MONEY", re.compile(r"(?:USD|EUR|GBP|\$|€|£)\s?\d[\d,]*(?:\.\d{1,2})?\b", re.I)),
+    # Magnitude suffixes are part of the amount: "$84M" and "$84,000,000" are
+    # the same figure, and without the suffix "$42.7M" was read as "$42". A
+    # single letter must touch the number ("$5m", never "$5 m"), so "$5 bananas"
+    # stays five dollars.
+    ("MONEY", re.compile(
+        r"(?:USD|EUR|GBP|\$|€|£)\s?\d[\d,]*(?:\.\d+)?"
+        r"(?:\s?(?:thousand|million|billion|mn|bn)|[kmb])?\b", re.I)),
     ("PHONE", re.compile(
         r"(?:\+?\d{1,3}[-. ]?)?(?:\(\d{3}\)|\b\d{3})[-. ]\d{3}[-. ]\d{4}\b")),
     # Contextual: only a reference number when a label precedes it, so bare
@@ -127,6 +134,30 @@ def _normalise_date(raw: str) -> str:
     return s.lower()
 
 
+_MAGNITUDE = {
+    "k": 10**3, "thousand": 10**3,
+    "m": 10**6, "mn": 10**6, "million": 10**6,
+    "b": 10**9, "bn": 10**9, "billion": 10**9,
+}
+
+
+def _normalise_money(raw: str) -> str:
+    """
+    Face value as a plain number, so every spelling of one amount compares equal:
+    "$84M", "$84 million", "$84,000,000" and "USD 84000000" all become 84000000.
+
+    Decimal, not float: "$42.7M" must become exactly 42700000, and a float
+    multiply can land a hair off and silently stop matching.
+    """
+    m = re.search(r"(\d[\d,]*(?:\.\d+)?)\s?([a-z]*)$", raw.strip().lower())
+    if not m:
+        return re.sub(r"[^\d.]", "", raw)
+    value = Decimal(m.group(1).replace(",", "")) * _MAGNITUDE.get(m.group(2), 1)
+    # normalize() drops trailing zeros ("185000.00" -> 185000); "f" keeps it out
+    # of exponent notation, which normalize() would otherwise produce.
+    return format(value.normalize(), "f")
+
+
 def normalise(entity_type: str, raw: str) -> str:
     """
     Canonical form used for matching a prompt against the document index.
@@ -141,8 +172,7 @@ def normalise(entity_type: str, raw: str) -> str:
     if entity_type == "EMAIL":
         return s.lower()
     if entity_type == "MONEY":
-        digits = re.sub(r"[^\d.]", "", s)
-        return digits[:-3] if digits.endswith(".00") else digits
+        return _normalise_money(s)
     if entity_type in PHRASE_TYPES:
         return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
     # Identifiers: drop separators entirely.
