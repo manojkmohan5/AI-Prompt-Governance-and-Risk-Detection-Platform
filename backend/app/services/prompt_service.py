@@ -27,6 +27,20 @@ from app.models.user import User
 from app.services import anomaly_service, llm_service
 
 
+# Most severe first. The stored "primary category" was flags[0] - whichever
+# detector happened to append first - so a prompt blocked for a document
+# leak that also contained PII was filed under PII_DETECTED.
+_SEVERITY_ORDER = (
+    "CONFIDENTIAL_DOC_LEAK", "PROMPT_INJECTION", "PII_DETECTED", "SENSITIVE_DATA",
+    "USER_ANOMALY", "KNOWLEDGE_SHIELD_SIMILAR", "EXCESSIVE_LENGTH",
+)
+
+
+def primary_category(flags):
+    """The most severe flag present, or None for a clean prompt."""
+    return next((f for f in _SEVERITY_ORDER if f in flags), flags[0] if flags else None)
+
+
 async def process(
     prompt_text: str,
     user: Optional[User],
@@ -60,7 +74,7 @@ async def process(
     # (KNOWLEDGE_SHIELD_SIMILAR) has a similarity score, stored separately in
     # knowledge_shield_score. Writing 1.0 here told the audit trail that an
     # advisory same-topic warning was a certainty.
-    ml_category = flags[0] if flags else None
+    ml_category = primary_category(flags)
     ml_confidence = None
 
     # ── 4. Anomaly Detection ──────────────────────────────────────────────────
