@@ -1,4 +1,6 @@
+import secrets
 from typing import List
+
 from pydantic_settings import BaseSettings
 
 
@@ -18,12 +20,11 @@ class Settings(BaseSettings):
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
-    RISK_BLOCK_THRESHOLD: int = 80
-    RISK_WARN_THRESHOLD: int = 50
+    # Blocking and warning thresholds are policy rules in the database, not
+    # settings. This one only sets when the advisory same-topic warning fires.
     KNOWLEDGE_SHIELD_THRESHOLD: float = 0.55
 
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
-    FAISS_INDEX_PATH: str = "data/faiss_index"
 
     # NER model for pulling names and organisations out of uploaded documents.
     # Runs at document upload only, never per prompt. Optional: if it cannot be
@@ -48,4 +49,27 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
+# Every placeholder key in this repository - the default above, .env.example,
+# docker-compose.yml - starts with this. They are all public.
+_PLACEHOLDER_KEY_PREFIX = "change-this"
+
+
+def ensure_secret_key(s: "Settings") -> None:
+    """
+    Never sign tokens with a key published in this repository.
+
+    Anyone who reads the repo could otherwise mint a valid token for any user,
+    and `docker compose up` without a SECRET_KEY used exactly such a key. A
+    placeholder is swapped for a random key for this process: sign-ins end on
+    restart, which is fine for development, and a real deployment sets
+    SECRET_KEY anyway. A key someone actually chose is left alone.
+    """
+    if s.SECRET_KEY.startswith(_PLACEHOLDER_KEY_PREFIX):
+        s.SECRET_KEY = secrets.token_urlsafe(64)
+        print("[Security] SECRET_KEY is a placeholder published in this repository; "
+              "using a random key for this process. Sign-ins end when it restarts - "
+              "set SECRET_KEY to keep them.")
+
+
 settings = Settings()
+ensure_secret_key(settings)

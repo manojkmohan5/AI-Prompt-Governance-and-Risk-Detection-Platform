@@ -56,7 +56,9 @@ async def upload_document(
     read the protected set. The extracted text is stored and indexed exactly as
     a pasted document is: this is a second way in, not a second code path.
     """
-    data = await file.read()
+    # One byte past the limit is enough to know it is too large; reading the
+    # whole file first let any upload size land in memory before being refused.
+    data = await file.read(document_text.MAX_UPLOAD_BYTES + 1)
     filename = file.filename or "upload"
     try:
         content = document_text.extract(filename, file.content_type or "", data)

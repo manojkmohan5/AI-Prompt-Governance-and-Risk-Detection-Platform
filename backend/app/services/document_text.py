@@ -90,10 +90,10 @@ def extract(filename: str, content_type: str, data: bytes) -> str:
     if not data:
         raise ExtractionError(422, "File is empty.")
     if len(data) > MAX_UPLOAD_BYTES:
+        # Only the first limit+1 bytes are ever read, so the true size is
+        # unknown here - say it is over the limit rather than quote a number.
         raise ExtractionError(
-            413,
-            f"File is {len(data) / 1024 / 1024:.1f}MB; the limit is "
-            f"{MAX_UPLOAD_BYTES // 1024 // 1024}MB.",
+            413, f"File is larger than the {MAX_UPLOAD_BYTES // 1024 // 1024}MB limit.",
         )
 
     suffix = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""

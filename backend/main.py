@@ -126,7 +126,9 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
-    debug=True,
+    # Was hardcoded True: every unhandled error returned a full stack trace to
+    # the caller. Only on when DEBUG is set, which defaults to off.
+    debug=settings.DEBUG,
 )
 
 app.add_middleware(
