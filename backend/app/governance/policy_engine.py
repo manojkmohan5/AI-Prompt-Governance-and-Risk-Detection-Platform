@@ -9,6 +9,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.policy_rule import ActionType, ConditionType, PolicyRule
 
+# Flags a FLAG_CONTAINS rule can match: those raised before the policy step
+# runs. RESPONSE_* flags are added after the LLM answers, when the decision is
+# already made, and the classifier's old flags are raised by nothing - a rule
+# on either could never fire, while displaying as active. The API refuses them
+# (schemas.PolicyRuleCreate) and the Settings page offers only these.
+POLICY_FLAGS = frozenset({
+    "CONFIDENTIAL_DOC_LEAK",   # risk_scorer, from the Knowledge Shield
+    "KNOWLEDGE_SHIELD_SIMILAR",  # risk_scorer, advisory
+    "PII_DETECTED",            # inspector
+    "PROMPT_INJECTION",        # inspector
+    "SENSITIVE_DATA",          # inspector
+    "EXCESSIVE_LENGTH",        # inspector
+    "USER_ANOMALY",            # prompt_service, before the policy step
+})
+
 # Action precedence (higher index = stricter)
 _ACTION_RANK = {
     ActionType.ALLOW: 0,

@@ -22,8 +22,8 @@ const ACTIONS = [
 // RESPONSE_* flags are added after the LLM answers, when the decision has
 // already been made, so a rule on them could never fire. KNOWLEDGE_SHIELD,
 // TOXICITY, IP_LEAK and ML_HIGH_RISK came from the removed classifier and are
-// no longer raised by anything. Keep in step with inspector.py,
-// risk_scorer.py and prompt_service.py (USER_ANOMALY).
+// no longer raised by anything. Must match POLICY_FLAGS in
+// backend/app/governance/policy_engine.py - the API rejects anything else.
 const FLAGS = [
   'CONFIDENTIAL_DOC_LEAK',
   'PII_DETECTED',
@@ -73,8 +73,15 @@ export default function SettingsPage() {
       setShowForm(false)
       setForm({ name: '', description: '', condition_type: 'risk_score_above', condition_value: '80', action: 'BLOCK', priority: 50, is_active: true })
       await refresh()
-    } catch {
-      setError('Failed to create policy.')
+    } catch (err: any) {
+      // The API says what is wrong with the rule (e.g. a score outside 0-100);
+      // a 422 carries a list of errors rather than a single message.
+      const detail = err?.response?.data?.detail
+      setError(
+        typeof detail === 'string' ? detail
+          : Array.isArray(detail) ? detail.map((d: any) => String(d.msg).replace(/^Value error, /, '')).join(' ')
+          : 'Failed to create policy.'
+      )
     } finally {
       setSubmitting(false)
     }

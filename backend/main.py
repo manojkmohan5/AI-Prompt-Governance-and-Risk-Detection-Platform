@@ -59,6 +59,35 @@ async def _migrate_policy_rules(conn) -> None:
     ), {"note": _RETIRED_NOTE, **{f"f{i}": f for i, f in enumerate(_RETIRED_FLAGS)}})
 
 
+async def _remove_unloadable_policy_rules(conn) -> None:
+    """
+    Delete policy rules whose condition type or action is not a valid value.
+
+    Such a row cannot be loaded, and the policy engine loads every active rule
+    on every prompt - one of them fails every prompt, and GET /policies too, so
+    it cannot be removed from the UI. The API now refuses them, but one saved
+    before that stays until removed here. A rule that cannot be loaded has no
+    behaviour to preserve; each deletion is logged so it can be recreated.
+    """
+    from app.models.policy_rule import ActionType, ConditionType
+
+    # Stored as enum member names, e.g. FLAG_CONTAINS, BLOCK.
+    conditions = [c.name for c in ConditionType]
+    actions = [a.name for a in ActionType]
+    params = {**{f"c{i}": v for i, v in enumerate(conditions)},
+              **{f"a{i}": v for i, v in enumerate(actions)}}
+    where = (f"condition_type NOT IN ({', '.join(f':c{i}' for i in range(len(conditions)))}) "
+             f"OR action NOT IN ({', '.join(f':a{i}' for i in range(len(actions)))})")
+    bad = (await conn.execute(
+        text(f"SELECT name, condition_type, action FROM policy_rules WHERE {where}"), params
+    )).fetchall()
+    for name, condition, action in bad:
+        print(f"[Migrate] Removed unloadable policy rule {name!r} "
+              f"(condition_type={condition!r}, action={action!r}); recreate it on the Settings page.")
+    if bad:
+        await conn.execute(text(f"DELETE FROM policy_rules WHERE {where}"), params)
+
+
 async def _migrate():
     async with engine.begin() as conn:
         result = await conn.execute(text("PRAGMA table_info(prompts)"))
@@ -66,6 +95,7 @@ async def _migrate():
         for col_name, col_type in _NEW_COLUMNS:
             if col_name not in existing:
                 await conn.execute(text(f"ALTER TABLE prompts ADD COLUMN {col_name} {col_type}"))
+        await _remove_unloadable_policy_rules(conn)
         await _migrate_policy_rules(conn)
 
 
