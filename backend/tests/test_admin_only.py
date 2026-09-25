@@ -37,6 +37,19 @@ ROUTES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _no_index_rebuild(monkeypatch):
+    """
+    Adding or removing a document rebuilds the index from the real database.
+    Stubbed for every test, not just the admin one: if a guard ever regresses,
+    an employee request reaches the handler, and the failing test must not
+    open the app's real database on its way to failing.
+    """
+    async def _noop():
+        pass
+    monkeypatch.setattr(ks_routes.knowledge_shield, "rebuild", _noop)
+
+
 def _user(role):
     return User(email=f"{role.value}@acme.corp", username=role.value, hashed_password="x",
                 role=role, department="Engineering", is_active=True)
@@ -74,13 +87,9 @@ def test_requests_without_a_token_are_refused(method, path, kwargs):
     assert resp.status_code == 401, resp.text
 
 
-def test_an_admin_can_upload(monkeypatch):
+def test_an_admin_can_upload():
     # Proves the 403s above come from the role check, not from a route that is
     # broken for everyone.
-    async def _no_rebuild():
-        pass
-
-    monkeypatch.setattr(ks_routes.knowledge_shield, "rebuild", _no_rebuild)
     _, path, kwargs = ROUTES[2]
     resp = _client(_user(UserRole.ADMIN)).post(path, **kwargs)
     assert resp.status_code == 201, resp.text
