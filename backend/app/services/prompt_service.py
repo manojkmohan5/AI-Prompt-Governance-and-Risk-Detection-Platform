@@ -55,11 +55,13 @@ async def process(
         inspection, doc_matches=doc_matches, topic_similar=shield.topic_similar,
     )
 
-    # Primary risk category for record storage. Confidence is 1.0 for anything
-    # matched by regex or found in the document index — these are exact hits,
-    # not estimates, and recording a fake probability would misrepresent them.
+    # Primary risk category for record storage. There is no model confidence
+    # to record: most flags are exact matches, and the one soft signal
+    # (KNOWLEDGE_SHIELD_SIMILAR) has a similarity score, stored separately in
+    # knowledge_shield_score. Writing 1.0 here told the audit trail that an
+    # advisory same-topic warning was a certainty.
     ml_category = flags[0] if flags else None
-    ml_confidence = 1.0 if flags else None
+    ml_confidence = None
 
     # ── 4. Anomaly Detection ──────────────────────────────────────────────────
     is_anomaly, anomaly_z, _baseline_avg = await anomaly_service.check(user, risk_score, db)

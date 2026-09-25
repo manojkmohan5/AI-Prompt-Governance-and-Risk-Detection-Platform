@@ -50,8 +50,15 @@ export function RiskScore({ score }: { score: number }) {
 export function FlagChip({ flag }: { flag: string }) {
   const styles: Record<string, string> = {
     PROMPT_INJECTION: 'bg-red-500/20 text-red-300 border-red-500/30',
+    CONFIDENTIAL_DOC_LEAK: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
+    KNOWLEDGE_SHIELD_SIMILAR: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30',
+    USER_ANOMALY: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
+    RESPONSE_DOC_LEAK: 'bg-purple-600/20 text-purple-300 border-purple-600/30',
+    RESPONSE_PII_LEAK: 'bg-orange-600/20 text-orange-300 border-orange-600/30',
     PII_DETECTED: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
     SENSITIVE_DATA: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
+    // Retired flags, kept so prompts recorded before the classifier was
+    // removed still render in history with their original colour.
     KNOWLEDGE_SHIELD: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
     TOXICITY: 'bg-red-600/20 text-red-400 border-red-600/30',
     EXCESSIVE_LENGTH: 'bg-gray-500/20 text-gray-400 border-gray-500/30',

@@ -8,6 +8,8 @@ interface ShieldStatus {
   encoder_available: boolean
   index_ready: boolean
   initialized: boolean
+  ner_enabled?: boolean
+  indexed_values?: number
 }
 
 const CATEGORIES = ['general', 'pricing', 'hr', 'technical', 'legal', 'financial', 'mergers']
@@ -108,31 +110,50 @@ export default function KnowledgeShieldPage() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="section-title mb-1">Shield Status</h2>
-            <p className="text-xs text-gray-500">Semantic IP leakage detection powered by SentenceTransformers + FAISS</p>
+            <p className="text-xs text-gray-500">Stops prompts that contain values from protected documents</p>
           </div>
-          <button onClick={refresh} className="btn-ghost p-2"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
+          <button onClick={refresh} className="btn-ghost p-2" aria-label="Refresh shield status">
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} aria-hidden="true" />
+          </button>
         </div>
         {status && (
           <div className="flex flex-wrap gap-4 mt-4">
             {[
-              { label: 'Encoder (SentenceTransformers)', ok: status.encoder_available },
-              { label: 'Vector Index (FAISS)', ok: status.index_ready },
-              { label: 'Shield Initialized', ok: status.initialized },
+              { label: 'Document matching', ok: status.initialized },
+              { label: 'Name detection (NER)', ok: !!status.ner_enabled },
+              { label: 'Similarity search', ok: status.index_ready },
             ].map(({ label, ok }) => (
               <div key={label} className="flex items-center gap-2">
-                {ok ? <CheckCircle size={14} className="text-green-400" /> : <XCircle size={14} className="text-red-400" />}
-                <span className="text-sm text-gray-300">{label}</span>
+                {ok
+                  ? <CheckCircle size={14} className="text-green-400" aria-hidden="true" />
+                  : <XCircle size={14} className="text-red-400" aria-hidden="true" />}
+                <span className="text-sm text-gray-300">
+                  {label}<span className="sr-only">: {ok ? 'on' : 'off'}</span>
+                </span>
               </div>
             ))}
             <div className="flex items-center gap-2">
-              <BookLock size={14} className="text-purple-400" />
-              <span className="text-sm text-gray-300">{docs.length} protected documents</span>
+              <BookLock size={14} className="text-purple-400" aria-hidden="true" />
+              <span className="text-sm text-gray-300">
+                {docs.length} protected documents
+                {status.indexed_values != null && `, ${status.indexed_values} values indexed`}
+              </span>
             </div>
           </div>
         )}
-        {!status?.encoder_available && (
-          <div className="mt-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2 text-xs text-yellow-400">
-            SentenceTransformers not available. Install with: <code className="font-mono">pip install sentence-transformers faiss-cpu</code>. The shield will be inactive until the encoder loads.
+        {/* NER fails quietly: the shield keeps running on identifiers alone,
+            so without this an admin would not know names are unprotected. */}
+        {status?.initialized && docs.length > 0 && !status.ner_enabled && (
+          <div role="status" className="mt-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2 text-xs text-yellow-400">
+            Name detection is off, so names of people and companies in these documents are
+            not protected. SSNs, card numbers and other identifiers still are. Install{' '}
+            <code className="font-mono">requirements-ml.txt</code> and restart to turn it on.
+          </div>
+        )}
+        {status && !status.encoder_available && (
+          <div role="status" className="mt-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2 text-xs text-yellow-400">
+            Similarity search is off (sentence-transformers is not installed). Document
+            matching still blocks leaks; only the advisory same-topic warning is missing.
           </div>
         )}
       </div>
@@ -303,12 +324,12 @@ export default function KnowledgeShieldPage() {
         <h2 className="section-title mb-3">How Knowledge Shield Works</h2>
         <ol className="space-y-2 text-sm text-gray-400">
           {[
-            'Confidential documents are encoded into dense vector embeddings using SentenceTransformers.',
-            'Embeddings are stored in a FAISS vector index for fast cosine similarity search.',
-            'Every incoming user prompt is also encoded into an embedding.',
-            'The prompt embedding is searched against the document index.',
-            'If similarity exceeds the threshold (default: 75%), the prompt is flagged as KNOWLEDGE_SHIELD.',
-            'The policy engine can then block or warn based on the flag.',
+            'When a document is added, its identifiers — SSNs, card numbers, contract and case numbers, dates, amounts — are extracted by pattern matching.',
+            'Names of people and companies are extracted by an NER model. This runs when documents are indexed, never on prompts.',
+            'Every prompt is checked against those values. Reformatting does not help: "492 83 7291" matches "492-83-7291", and "$84M" matches "$84,000,000".',
+            'One identifier or person\'s name from a document confirms a leak. A date, amount or company needs a second value from the same document.',
+            'A confirmed leak raises CONFIDENTIAL_DOC_LEAK, which the default policy blocks.',
+            'Separately, the prompt is compared by meaning with document passages. A close match only warns: meaning alone cannot tell a leak from a harmless question on the same topic.',
           ].map((step, i) => (
             <li key={i} className="flex items-start gap-2">
               <span className="flex-shrink-0 w-5 h-5 rounded-full bg-purple-500/20 text-purple-400 text-xs flex items-center justify-center font-bold">{i + 1}</span>
