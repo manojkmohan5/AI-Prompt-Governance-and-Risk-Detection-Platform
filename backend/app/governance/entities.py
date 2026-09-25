@@ -213,8 +213,16 @@ def ner_available() -> bool:
         try:
             from transformers import pipeline
             from app.core.config import settings
+            # "first", not "simple". The model splits uncommon names into
+            # word pieces and often tags each piece as the start of a new
+            # entity; "simple" keeps those pieces apart, so "Priya Raghavan"
+            # came back as "P" + "##riya Raghavan" and was indexed as
+            # "riya raghavan", which no prompt ever matches. "first" regroups
+            # pieces into whole words before grouping words into entities.
+            # Measured on the seeded documents: 8/13 expected names indexed
+            # with "simple", 13/13 with "first".
             _ner_pipeline = pipeline(
-                "ner", model=settings.NER_MODEL, aggregation_strategy="simple",
+                "ner", model=settings.NER_MODEL, aggregation_strategy="first",
             )
             _ner_available = True
         except Exception as e:                                   # pragma: no cover

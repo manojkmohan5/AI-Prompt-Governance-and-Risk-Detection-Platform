@@ -130,6 +130,19 @@ jobs:
           curl -sf http://localhost:8080/api/docs >/dev/null \
             || (echo "frontend -> backend /api reverse proxy did not work" && exit 1)
 
+      # The Python job can't run these: it deliberately skips the ML packages,
+      # and every other test stubs the models off. That is how an NER setting
+      # that fragmented names ("P" + "##riya Raghavan") shipped unnoticed. Run
+      # them here, inside the built image, against the model actually baked
+      # into it. The image excludes tests/ (.dockerignore), so mount them in.
+      - name: Run real-model tests inside the backend image
+        run: |
+          docker run --rm \
+            -v "$PWD/backend/tests:/app/tests:ro" \
+            -v "$PWD/backend/conftest.py:/app/conftest.py:ro" \
+            governance-backend:ci \
+            sh -c "pip install -q pytest==8.3.4 && python -m pytest -q tests/test_ml_models.py"
+
       - name: Show container logs on failure
         if: failure()
         run: |
