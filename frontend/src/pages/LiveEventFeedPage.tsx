@@ -52,6 +52,7 @@ export default function LiveEventFeedPage() {
             <button
               key={f}
               onClick={() => setFilter(f)}
+              aria-pressed={filter === f}
               className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                 filter === f
                   ? 'bg-brand/20 border-brand text-brand'
@@ -68,8 +69,8 @@ export default function LiveEventFeedPage() {
             {paused ? <Play size={14} /> : <Pause size={14} />}
             {paused ? 'Resume' : 'Pause'}
           </button>
-          <button onClick={fetchEvents} className="btn-ghost p-2">
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          <button onClick={fetchEvents} className="btn-ghost p-2" aria-label="Refresh events">
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} aria-hidden="true" />
           </button>
         </div>
       </div>

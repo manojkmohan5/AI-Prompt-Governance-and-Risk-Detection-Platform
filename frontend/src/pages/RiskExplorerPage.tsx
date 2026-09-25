@@ -46,6 +46,7 @@ export default function RiskExplorerPage() {
             <input
               type="text"
               className="input pl-8"
+              aria-label="Search prompts"
               placeholder="Search prompts..."
               value={search}
               onChange={e => setSearch(e.target.value)}

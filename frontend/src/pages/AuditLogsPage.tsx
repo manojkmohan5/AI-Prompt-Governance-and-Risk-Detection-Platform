@@ -44,6 +44,7 @@ export default function AuditLogsPage() {
             <input
               type="text"
               className="input pl-8"
+              aria-label="Filter by username"
               placeholder="Filter by username..."
               value={username}
               onChange={e => setUsername(e.target.value)}

@@ -180,13 +180,18 @@ export default function SettingsPage() {
               </div>
               {isAdmin && (
                 <div className="flex items-center gap-1">
-                  <button onClick={() => toggle(p.id)} title={p.is_active ? 'Disable' : 'Enable'} className="btn-ghost p-1.5">
+                  <button
+                    onClick={() => toggle(p.id)}
+                    title={p.is_active ? 'Disable' : 'Enable'}
+                    aria-label={`${p.is_active ? 'Disable' : 'Enable'} rule ${p.name}`}
+                    className="btn-ghost p-1.5"
+                  >
                     {p.is_active
-                      ? <ToggleRight size={18} className="text-green-400" />
-                      : <ToggleLeft size={18} className="text-gray-500" />}
+                      ? <ToggleRight size={18} className="text-green-400" aria-hidden="true" />
+                      : <ToggleLeft size={18} className="text-gray-500" aria-hidden="true" />}
                   </button>
-                  <button onClick={() => remove(p.id)} className="btn-ghost p-1.5 text-gray-600 hover:text-red-400">
-                    <Trash2 size={14} />
+                  <button onClick={() => remove(p.id)} aria-label={`Delete rule ${p.name}`} className="btn-ghost p-1.5 text-gray-600 hover:text-red-400">
+                    <Trash2 size={14} aria-hidden="true" />
                   </button>
                 </div>
               )}

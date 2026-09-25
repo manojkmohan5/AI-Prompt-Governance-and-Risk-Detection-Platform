@@ -185,7 +185,7 @@ export default function PromptConsolePage() {
       <div className="card">
         <p className="section-title mb-3">Submit Prompt</p>
         <div className="flex gap-2 mb-3">
-          <select className="input max-w-[210px]" value={model} onChange={e => setModel(e.target.value)}>
+          <select className="input max-w-[210px]" aria-label="Model" value={model} onChange={e => setModel(e.target.value)}>
             <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
             <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (fastest)</option>
             <option value="mixtral-8x7b-32768">mixtral-8x7b-32768</option>
@@ -194,6 +194,7 @@ export default function PromptConsolePage() {
         </div>
 
         <textarea
+          aria-label="Prompt"
           className="input min-h-[120px] resize-y font-mono text-sm mb-3"
           placeholder="Enter your prompt... Governance inspection runs before it reaches the LLM."
           value={prompt}
@@ -240,8 +241,8 @@ export default function PromptConsolePage() {
               <span className="text-xs text-gray-500 bg-surface-2 px-2 py-0.5 rounded-full">{historyTotal} total</span>
             )}
           </div>
-          <button onClick={() => loadHistory(historyPage)} className="btn-ghost p-1.5" title="Refresh">
-            <RefreshCw size={13} className={historyLoading ? 'animate-spin' : ''} />
+          <button onClick={() => loadHistory(historyPage)} className="btn-ghost p-1.5" title="Refresh" aria-label="Refresh history">
+            <RefreshCw size={13} className={historyLoading ? 'animate-spin' : ''} aria-hidden="true" />
           </button>
         </div>
 

@@ -311,8 +311,9 @@ export default function KnowledgeShieldPage() {
               <button
                 onClick={() => deleteDoc(doc.id)}
                 className="text-gray-600 hover:text-red-400 transition-colors p-1"
+                aria-label={`Remove ${doc.name}`}
               >
-                <Trash2 size={14} />
+                <Trash2 size={14} aria-hidden="true" />
               </button>
             </div>
           ))}

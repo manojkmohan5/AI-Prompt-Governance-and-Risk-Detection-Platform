@@ -103,8 +103,10 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-xs text-gray-400 mb-1.5">Email</label>
+              <label htmlFor="login-email" className="block text-xs text-gray-400 mb-1.5">Email</label>
               <input
+                id="login-email"
+                autoComplete="username"
                 type="email"
                 className="input"
                 value={email}
@@ -114,9 +116,11 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1.5">Password</label>
+              <label htmlFor="login-password" className="block text-xs text-gray-400 mb-1.5">Password</label>
               <div className="relative">
                 <input
+                  id="login-password"
+                  autoComplete="current-password"
                   type={showPw ? 'text' : 'password'}
                   className="input pr-10"
                   value={password}
@@ -128,8 +132,10 @@ export default function LoginPage() {
                   type="button"
                   onClick={() => setShowPw(!showPw)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                  aria-label={showPw ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPw}
                 >
-                  {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
+                  {showPw ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                 </button>
               </div>
             </div>
