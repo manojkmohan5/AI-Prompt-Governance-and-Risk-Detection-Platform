@@ -10,6 +10,6 @@ This is a two-package repo: `backend/` (FastAPI + SQLAlchemy + the ML governance
 
 ## Cross-cutting notes
 
-- **Testing**: `backend/tests/` has a small pytest suite (currently covering `app/core/cache.py`); no frontend test runner exists — `npm run build` (`tsc -b`) is the only automated check on that side. CI (`.github/workflows/ci.yml`) runs both, plus a Docker build + smoke test job.
+- **Testing**: `backend/tests/` is a pytest suite covering leak detection, credentials, uploads, access control, policy validation and migrations, seeding, security defaults, and (when the ML packages are installed) the real models; see backend/CLAUDE.md. No frontend test runner exists — `npm run build` (`tsc -b`) is the automated check on that side. CI (`.github/workflows/ci.yml`) runs on every push and PR: backend lint + tests, frontend build, and a Docker build + smoke test. `main` is branch-protected: changes land only through a PR whose checks pass.
 - **Docker**: `docker-compose.yml` at the repo root runs the full stack (backend, frontend via nginx, Redis) — `docker compose up --build`. The backend image pre-downloads the NER and embedding checkpoints in the build layer (see `backend/Dockerfile`) so a cold container doesn't re-fetch them on first document upload. See [backend/CLAUDE.md](backend/CLAUDE.md) for details on that layering and why torch is installed from the CPU-only index.
 - **Accessibility**: all web UI code (`frontend/src`) must meet WCAG 2.1 AA. See [frontend/CLAUDE.md](frontend/CLAUDE.md) for specifics.
