@@ -26,28 +26,12 @@ USERS = [
 
 POLICIES = [
     {
-        "name": "Block ML High Risk",
-        "description": "Block prompts classified as high risk by the ML classifier.",
-        "condition_type": ConditionType.FLAG_CONTAINS,
-        "condition_value": "ML_HIGH_RISK",
-        "action": ActionType.BLOCK,
-        "priority": 92,
-    },
-    {
         "name": "Warn User Anomaly",
         "description": "Issue elevated warning when a user's risk score spikes above their baseline.",
         "condition_type": ConditionType.FLAG_CONTAINS,
         "condition_value": "USER_ANOMALY",
         "action": ActionType.WARN,
         "priority": 60,
-    },
-    {
-        "name": "Warn IP Leak",
-        "description": "Warn when BERT classifier detects attempts to extract intellectual property or context documents.",
-        "condition_type": ConditionType.FLAG_CONTAINS,
-        "condition_value": "IP_LEAK",
-        "action": ActionType.WARN,
-        "priority": 45,
     },
     {
         "name": "Block Critical Risk",
@@ -66,16 +50,8 @@ POLICIES = [
         "priority": 95,
     },
     {
-        "name": "Block Toxic Content",
-        "description": "Block prompts containing toxic or unsafe content.",
-        "condition_type": ConditionType.FLAG_CONTAINS,
-        "condition_value": "TOXICITY",
-        "action": ActionType.BLOCK,
-        "priority": 95,
-    },
-    {
         "name": "Block Knowledge Shield Matches",
-        "description": "Block prompts that match confidential document embeddings.",
+        "description": "Block prompts containing a value confirmed to come from a protected document.",
         "condition_type": ConditionType.FLAG_CONTAINS,
         "condition_value": "CONFIDENTIAL_DOC_LEAK",
         "action": ActionType.BLOCK,

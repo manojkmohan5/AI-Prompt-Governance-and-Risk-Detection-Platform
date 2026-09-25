@@ -18,7 +18,29 @@ const ACTIONS = [
   { value: 'BLOCK', label: 'Block', color: 'text-red-400' },
 ]
 
-const FLAGS = ['PROMPT_INJECTION', 'PII_DETECTED', 'SENSITIVE_DATA', 'KNOWLEDGE_SHIELD', 'TOXICITY', 'EXCESSIVE_LENGTH']
+// Flags a rule can match. Must be raised BEFORE the policy step: the
+// RESPONSE_* flags are added after the LLM answers, when the decision has
+// already been made, so a rule on them could never fire. KNOWLEDGE_SHIELD,
+// TOXICITY, IP_LEAK and ML_HIGH_RISK came from the removed classifier and are
+// no longer raised by anything. Keep in step with inspector.py,
+// risk_scorer.py and prompt_service.py (USER_ANOMALY).
+const FLAGS = [
+  'CONFIDENTIAL_DOC_LEAK',
+  'PII_DETECTED',
+  'PROMPT_INJECTION',
+  'SENSITIVE_DATA',
+  'KNOWLEDGE_SHIELD_SIMILAR',
+  'USER_ANOMALY',
+  'EXCESSIVE_LENGTH',
+]
+
+// Changing the condition type must also change the value, or the old value
+// is submitted: switching to "flag contains" left '80' in place and created a
+// rule matching a flag named "80", which can never fire.
+const DEFAULT_VALUE: Record<string, string> = {
+  risk_score_above: '80',
+  flag_contains: FLAGS[0],
+}
 
 export default function SettingsPage() {
   const { user } = useAuth()
@@ -96,34 +118,34 @@ export default function SettingsPage() {
             <h3 className="text-sm font-medium text-white">Create Policy Rule</h3>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
-                <label className="block text-xs text-gray-400 mb-1">Rule Name</label>
-                <input className="input" placeholder="e.g. Block Critical Risk" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
+                <label htmlFor="rule-name" className="block text-xs text-gray-400 mb-1">Rule Name</label>
+                <input id="rule-name" className="input" placeholder="e.g. Block Critical Risk" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Condition</label>
-                <select className="input" value={form.condition_type} onChange={e => setForm(f => ({ ...f, condition_type: e.target.value }))}>
+                <label htmlFor="rule-condition" className="block text-xs text-gray-400 mb-1">Condition</label>
+                <select id="rule-condition" className="input" value={form.condition_type} onChange={e => setForm(f => ({ ...f, condition_type: e.target.value, condition_value: DEFAULT_VALUE[e.target.value] ?? '' }))}>
                   {CONDITION_TYPES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Value</label>
+                <label htmlFor="rule-value" className="block text-xs text-gray-400 mb-1">Value</label>
                 {form.condition_type === 'flag_contains' ? (
-                  <select className="input" value={form.condition_value} onChange={e => setForm(f => ({ ...f, condition_value: e.target.value }))}>
+                  <select id="rule-value" className="input" value={form.condition_value} onChange={e => setForm(f => ({ ...f, condition_value: e.target.value }))}>
                     {FLAGS.map(f => <option key={f} value={f}>{f}</option>)}
                   </select>
                 ) : (
-                  <input className="input" placeholder={form.condition_type === 'risk_score_above' ? '80' : 'value'} value={form.condition_value} onChange={e => setForm(f => ({ ...f, condition_value: e.target.value }))} />
+                  <input id="rule-value" className="input" placeholder={form.condition_type === 'risk_score_above' ? '80' : 'value'} value={form.condition_value} onChange={e => setForm(f => ({ ...f, condition_value: e.target.value }))} />
                 )}
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Action</label>
-                <select className="input" value={form.action} onChange={e => setForm(f => ({ ...f, action: e.target.value }))}>
+                <label htmlFor="rule-action" className="block text-xs text-gray-400 mb-1">Action</label>
+                <select id="rule-action" className="input" value={form.action} onChange={e => setForm(f => ({ ...f, action: e.target.value }))}>
                   {ACTIONS.map(a => <option key={a.value} value={a.value}>{a.label}</option>)}
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Priority (higher = evaluated first)</label>
-                <input type="number" className="input" min={0} max={200} value={form.priority} onChange={e => setForm(f => ({ ...f, priority: +e.target.value }))} />
+                <label htmlFor="rule-priority" className="block text-xs text-gray-400 mb-1">Priority (higher = evaluated first)</label>
+                <input id="rule-priority" type="number" className="input" min={0} max={200} value={form.priority} onChange={e => setForm(f => ({ ...f, priority: +e.target.value }))} />
               </div>
             </div>
             <div className="flex gap-2">
