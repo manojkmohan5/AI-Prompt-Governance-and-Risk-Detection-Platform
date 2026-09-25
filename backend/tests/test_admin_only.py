@@ -65,6 +65,9 @@ class _FakeDB:
     async def flush(self):
         pass
 
+    async def commit(self):
+        pass
+
 
 def _client(user):
     app = FastAPI()
