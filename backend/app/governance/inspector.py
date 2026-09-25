@@ -98,7 +98,7 @@ class PromptInspector:
         result.entities = ent.extract_identifiers(text)
         if result.pii_entities:
             result.flags.append("PII_DETECTED")
-        if any(e.type == "API_KEY" for e in result.entities):
+        if any(e.type in ent.SECRET_TYPES for e in result.entities):
             result.flags.append("SENSITIVE_DATA")
 
         result.injection_spans = detect_injection(text)

@@ -84,10 +84,12 @@ async def process(
     if not is_blocked:
         send_text = prompt_text
         if policy_action == PolicyAction.REDACT.value:
-            # Mask PII spans and any value traced to a protected document. Both
-            # are needed: redacting PII alone would still forward a document's
-            # contract dates or party names verbatim to the LLM.
-            spans = [e for e in inspection.entities if e.type in ent.PII_TYPES]
+            # Mask PII, credentials, and any value traced to a protected
+            # document. Redacting PII alone forwarded API keys and passwords
+            # to the LLM verbatim, and a document's contract dates or party
+            # names with them.
+            spans = [e for e in inspection.entities
+                     if e.type in ent.PII_TYPES or e.type in ent.SECRET_TYPES]
             spans += [
                 ent.Entity(m.type, m.value, m.start, m.end, "") for m in shield.matches
             ]

@@ -66,11 +66,11 @@ POLICIES = [
         "priority": 70,
     },
     {
-        "name": "Warn on Sensitive Data",
-        "description": "Issue a warning when sensitive business data is referenced.",
+        "name": "Redact Secrets Before LLM",
+        "description": "Mask API keys, passwords, private keys and tokens before the prompt reaches the LLM.",
         "condition_type": ConditionType.FLAG_CONTAINS,
         "condition_value": "SENSITIVE_DATA",
-        "action": ActionType.WARN,
+        "action": ActionType.REDACT,
         "priority": 50,
     },
     {

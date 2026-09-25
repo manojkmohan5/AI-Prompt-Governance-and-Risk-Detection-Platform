@@ -19,7 +19,9 @@ from typing import Dict, List
 
 from app.governance import entities as ent
 
-_SECRET_TYPES = frozenset({"API_KEY", "IBAN", "CREDIT_CARD"})
+# Credentials, plus the financial identifiers that are secrets once they
+# appear in generated text.
+_SECRET_TYPES = ent.SECRET_TYPES | {"IBAN", "CREDIT_CARD"}
 
 
 @dataclass

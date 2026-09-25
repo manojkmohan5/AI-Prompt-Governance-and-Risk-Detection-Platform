@@ -60,7 +60,7 @@ _CHUNK_OVERLAP = 120
 # it appearing in both a protected document and a prompt is not coincidence.
 _HIGH_SPECIFICITY = frozenset({
     "SSN", "CREDIT_CARD", "EMAIL", "PHONE", "IBAN", "PASSPORT",
-    "API_KEY", "REF_NUMBER", "PERSON",
+    "API_KEY", "PASSWORD", "PRIVATE_KEY", "TOKEN", "REF_NUMBER", "PERSON",
 })
 # A match on these is weak alone — dates, sums and company names collide with
 # innocent prompts constantly — so two from the same document are required.
