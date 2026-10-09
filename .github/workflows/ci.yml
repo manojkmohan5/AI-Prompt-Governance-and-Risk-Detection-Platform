@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Backend ────────────────────────────────────────────────────────────
+      # ── Detection service and backend ──────────────────────────────────────
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -58,14 +58,40 @@ jobs:
           cache-dependency-path: |
             backend/requirements.txt
             backend/requirements-dev.txt
+            detection/requirements.txt
+            detection/requirements-dev.txt
 
-      # requirements-ml.txt (torch/transformers/faiss) is not installed here:
-      # it is large, every module that needs it imports it lazily, and
-      # detection is regex plus lookups. The real models are tested in the
-      # built image further down.
-      - name: "Backend: install"
-        working-directory: backend
-        run: pip install -r requirements.txt -r requirements-dev.txt
+      # One environment for both: the backend's seeding test runs the real
+      # detection app in-process. requirements-ml.txt (torch, transformers,
+      # faiss) is not installed here: it is large, every module that needs it
+      # imports it lazily, and the checks that block are regex plus lookups.
+      # The real models are tested in the built image further down.
+      - name: "Install backend and detection dependencies"
+        run: >-
+          pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+          -r detection/requirements.txt -r detection/requirements-dev.txt
+
+      - name: "Detection: compile check"
+        working-directory: detection
+        run: python -m compileall -q detection
+
+      - name: "Detection: lint (pyflakes)"
+        working-directory: detection
+        run: python -m pyflakes detection tests conftest.py
+
+      - name: "Detection: tests"
+        working-directory: detection
+        run: pytest -v
+
+      # Docker Compose runs Postgres, and it differs from SQLite in ways only a
+      # real run shows: it enforces foreign keys and VARCHAR lengths and
+      # refuses 0/1 for booleans. Every test that touches a database uses the
+      # db_engine fixture (conftest.py), which honours TEST_DATABASE_URL.
+      - name: "Detection: tests on Postgres"
+        working-directory: detection
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://governance:governance@localhost:5432/governance_test
+        run: pytest -q
 
       - name: "Backend: compile check"
         working-directory: backend
@@ -85,10 +111,6 @@ jobs:
         working-directory: backend
         run: pytest -v
 
-      # Docker Compose runs Postgres, and it differs from SQLite in ways only a
-      # real run shows: it enforces foreign keys and VARCHAR lengths and
-      # refuses 0/1 for booleans. Every test that touches a database uses the
-      # db_engine fixture (conftest.py), which honours TEST_DATABASE_URL.
       - name: "Backend: tests on Postgres"
         working-directory: backend
         env:
@@ -113,7 +135,7 @@ jobs:
       # ── Docker ─────────────────────────────────────────────────────────────
       - uses: docker/setup-buildx-action@v3
 
-      - name: "Docker: build backend image (includes the model layer)"
+      - name: "Docker: build backend image"
         uses: docker/build-push-action@v6
         with:
           context: ./backend
@@ -121,6 +143,15 @@ jobs:
           tags: governance-backend:ci
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
+
+      - name: "Docker: build detection image (includes the model layer)"
+        uses: docker/build-push-action@v6
+        with:
+          context: ./detection
+          load: true
+          tags: governance-detection:ci
+          cache-from: type=gha,scope=detection
+          cache-to: type=gha,mode=max,scope=detection
 
       - name: "Docker: build frontend image"
         uses: docker/build-push-action@v6
@@ -137,18 +168,25 @@ jobs:
           docker network create governance-ci-net
 
           docker run -d --name redis --network governance-ci-net redis:7-alpine
-          # The same database Docker Compose runs.
+          # The same database server Docker Compose runs, with the same init
+          # script creating the detection service's own database.
           docker run -d --name postgres --network governance-ci-net \
             -e POSTGRES_USER=governance -e POSTGRES_PASSWORD=governance -e POSTGRES_DB=governance \
+            -v "$PWD/postgres/init:/docker-entrypoint-initdb.d:ro" \
             postgres:17-alpine
-          for _ in $(seq 1 30); do
-            docker exec postgres pg_isready -U governance -d governance && break
+          for _ in $(seq 1 30); do   # over TCP; see the healthcheck in docker-compose.yml
+            docker exec postgres pg_isready -h 127.0.0.1 -U governance -d governance && break
             sleep 1
           done
 
+          docker run -d --name detection --network governance-ci-net \
+            -e DATABASE_URL=postgresql+asyncpg://governance:governance@postgres:5432/detection \
+            -e REDIS_URL=redis://redis:6379/0 \
+            --health-interval 2s \
+            governance-detection:ci
           docker run -d --name backend --network governance-ci-net \
             -e DATABASE_URL=postgresql+asyncpg://governance:governance@postgres:5432/governance \
-            -e REDIS_URL=redis://redis:6379/0 \
+            -e DETECTION_URL=http://detection:8002 \
             --health-interval 2s \
             -p 8001:8001 governance-backend:ci
 
@@ -179,7 +217,7 @@ jobs:
           # host: the frontend's checked ::1, which nginx does not listen on,
           # so it ran "unhealthy" while serving pages. Compose waits on these.
           echo "waiting for the containers' own health checks..."
-          for c in backend frontend; do
+          for c in detection backend frontend; do
             for _ in $(seq 1 30); do
               [ "$(docker inspect -f '{{.State.Health.Status}}' $c)" = healthy ] && break
               sleep 1
@@ -201,13 +239,10 @@ jobs:
           # The whole pipeline on Postgres, in the real image, through nginx:
           # a prompt quoting a seeded document's SSN must be blocked, and an
           # ordinary one answered (by the mock LLM - CI has no Groq key).
+          # The seeder sends the documents to the detection service, which
+          # indexes them on arrival - no restart.
           echo "seeding, then sending prompts through nginx..."
           docker exec backend python -m seed_data.seed
-          docker restart backend    # the index is built at startup, from the seeded documents
-          for _ in $(seq 1 60); do
-            [ "$(docker inspect -f '{{.State.Health.Status}}' backend)" = healthy ] && break
-            sleep 2
-          done
           api=http://localhost:8080/api/v1
           token=$(curl -sf -X POST "$api/auth/login" -H 'Content-Type: application/json' \
             -d '{"email":"admin@acme.corp","password":"Admin@1234"}' \
@@ -224,22 +259,33 @@ jobs:
           curl -sf "$api/analytics/overview" -H "Authorization: Bearer $token" >/dev/null
           curl -sf "$api/audit?username=adm" -H "Authorization: Bearer $token" >/dev/null
 
+          # Fails closed: with the detection service down a prompt is refused
+          # (503), never sent unchecked - and signing in still works.
+          echo "stopping the detection service: prompts must be refused..."
+          docker stop detection
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$api/prompts" \
+            -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+            -d '{"prompt": "In one sentence, what is a reverse proxy?"}')
+          [ "$code" = "503" ] || (echo "with detection down, expected 503, got $code" && exit 1)
+          curl -sf "$api/auth/me" -H "Authorization: Bearer $token" >/dev/null
+
       # The backend steps above skip the ML packages, and every other test
       # stubs the models off - which is how an NER setting that fragmented
       # names ("P" + "##riya Raghavan") shipped unnoticed. These run the real
       # models, inside the built image, against the checkpoints baked into it.
       # The image excludes tests/ (.dockerignore), so they are mounted in.
-      - name: "Docker: real-model tests inside the backend image"
+      - name: "Docker: real-model tests inside the detection image"
         run: |
           docker run --rm \
-            -v "$PWD/backend/tests:/app/tests:ro" \
-            -v "$PWD/backend/conftest.py:/app/conftest.py:ro" \
-            governance-backend:ci \
+            -v "$PWD/detection/tests:/app/tests:ro" \
+            -v "$PWD/detection/conftest.py:/app/conftest.py:ro" \
+            governance-detection:ci \
             sh -c "pip install -q pytest==8.3.4 && python -m pytest -q tests/test_ml_models.py"
 
       - name: Show container logs on failure
         if: failure()
         run: |
+          docker logs detection || true
           docker logs backend || true
           docker logs frontend || true
           docker logs redis || true
