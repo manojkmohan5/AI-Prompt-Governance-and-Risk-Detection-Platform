@@ -7,8 +7,8 @@ so they're safe to exercise without a trained model.
 """
 import pytest
 
-from app.core import cache
-from app.core.config import settings
+from detection import cache
+from detection.config import settings
 
 
 def test_build_key_is_deterministic():

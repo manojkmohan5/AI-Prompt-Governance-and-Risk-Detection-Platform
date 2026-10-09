@@ -10,8 +10,8 @@ import pathlib
 
 import pytest
 
-from app.governance import entities as ent
-from app.services import document_text as dt
+from detection import entities as ent
+from detection import document_text as dt
 
 SAMPLES = pathlib.Path(__file__).resolve().parents[2] / "sample_documents"
 

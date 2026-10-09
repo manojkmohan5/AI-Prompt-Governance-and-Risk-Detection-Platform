@@ -7,13 +7,15 @@ protected, and one who could delete a document would switch its protection
 off. Every route on the router is checked, not just upload, because the guard
 is per-route and a new route can be added without it.
 
-Runs through FastAPI's real dependency chain (require_admin -> get_current_user)
-with only the user lookup and database replaced, so a route that forgets the
-guard fails here.
+The documents live in the detection service, which never sees an end user's
+token: these routes are the only guard. Runs through FastAPI's real dependency
+chain (require_admin -> get_current_user) with only the user lookup, the
+database and the detection service replaced, so a route that forgets the guard
+fails here - and a refused request must never reach the detection service.
 """
 import uuid
-from datetime import datetime, timezone
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -22,6 +24,7 @@ from app.api.deps import get_current_user
 from app.api.v1.endpoints import knowledge_shield as ks_routes
 from app.core.database import get_db
 from app.models.user import User, UserRole
+from app.services import detection_client
 
 DOC_ID = str(uuid.uuid4())
 
@@ -38,16 +41,23 @@ ROUTES = [
 
 
 @pytest.fixture(autouse=True)
-def _no_index_rebuild(monkeypatch):
-    """
-    Adding or removing a document rebuilds the index from the real database.
-    Stubbed for every test, not just the admin one: if a guard ever regresses,
-    an employee request reaches the handler, and the failing test must not
-    open the app's real database on its way to failing.
-    """
-    async def _noop():
-        pass
-    monkeypatch.setattr(ks_routes.knowledge_shield, "rebuild", _noop)
+def forwarded(monkeypatch):
+    """Stands in for the detection service and records what reached it."""
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        if request.url.path == "/v1/status":
+            return httpx.Response(200, json={"documents": 0})
+        if request.method == "GET":
+            return httpx.Response(200, json=[])
+        return httpx.Response(201, json={"id": str(uuid.uuid4()), "name": "notes", "category": "general",
+                                         "created_at": "2026-01-01T00:00:00Z"})
+
+    monkeypatch.setattr(detection_client, "_transport", httpx.MockTransport(handler))
+    return requests
 
 
 def _user(role):
@@ -55,48 +65,39 @@ def _user(role):
                 role=role, department="Engineering", is_active=True)
 
 
-class _FakeDB:
-    """Just enough session for the upload handler to reach its response."""
-
-    def add(self, obj):
-        obj.id = obj.id or uuid.uuid4()
-        obj.created_at = obj.created_at or datetime.now(timezone.utc)
-
-    async def flush(self):
-        pass
-
-    async def commit(self):
-        pass
-
-
 def _client(user):
     app = FastAPI()
     app.include_router(ks_routes.router)
     if user is not None:
         app.dependency_overrides[get_current_user] = lambda: user
-    app.dependency_overrides[get_db] = lambda: _FakeDB()
+    app.dependency_overrides[get_db] = lambda: None   # the guard must refuse before any lookup
     return TestClient(app)
 
 
 @pytest.mark.parametrize("method, path, kwargs", ROUTES, ids=[f"{m} {p}" for m, p, _ in ROUTES])
-def test_employees_are_refused_on_every_route(method, path, kwargs):
+def test_employees_are_refused_on_every_route(method, path, kwargs, forwarded):
     resp = getattr(_client(_user(UserRole.EMPLOYEE)), method)(path, **kwargs)
     assert resp.status_code == 403, resp.text
+    assert forwarded == []
 
 
 @pytest.mark.parametrize("method, path, kwargs", ROUTES, ids=[f"{m} {p}" for m, p, _ in ROUTES])
-def test_requests_without_a_token_are_refused(method, path, kwargs):
+def test_requests_without_a_token_are_refused(method, path, kwargs, forwarded):
     resp = getattr(_client(None), method)(path, **kwargs)
     assert resp.status_code == 401, resp.text
+    assert forwarded == []
 
 
-def test_an_admin_can_upload():
+def test_an_admin_can_upload(forwarded):
     # Proves the 403s above come from the role check, not from a route that is
     # broken for everyone.
     _, path, kwargs = ROUTES[2]
     resp = _client(_user(UserRole.ADMIN)).post(path, **kwargs)
     assert resp.status_code == 201, resp.text
     assert resp.json()["name"] == "notes"
+    [sent] = forwarded
+    assert sent.url.path == "/v1/documents/upload"
+    assert b"Contract number NW-2024-8871 is active." in sent.content    # the file itself
 
 
 def test_the_route_list_above_covers_the_whole_router():

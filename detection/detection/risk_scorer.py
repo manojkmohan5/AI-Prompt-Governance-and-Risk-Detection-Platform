@@ -14,9 +14,8 @@ Score = sum of contributions, capped at 100.
 """
 from typing import List, Optional, Sequence, Tuple
 
-from app.governance import entities as ent
-from app.governance.inspector import InspectionResult
-from app.models.prompt import RiskLevel
+from detection import entities as ent
+from detection.inspector import InspectionResult
 
 # ── Evidence-based points ──────────────────────────────────────────────────────
 # A confirmed document leak outweighs everything else: the value in the prompt
@@ -74,8 +73,8 @@ def score(
     result: InspectionResult,
     doc_matches: Optional[Sequence] = None,
     topic_similar: bool = False,
-) -> Tuple[int, RiskLevel, List[str]]:
-    """Return (risk_score 0–100, RiskLevel, active_flags)."""
+) -> Tuple[int, str, List[str]]:
+    """Return (risk_score 0–100, risk level name, active_flags)."""
     flags = list(result.flags)
     s = 0
 
@@ -113,12 +112,12 @@ def score(
     s = min(s, 100)
 
     if s >= 80:
-        level = RiskLevel.CRITICAL
+        level = "CRITICAL"
     elif s >= 60:
-        level = RiskLevel.HIGH
+        level = "HIGH"
     elif s >= 30:
-        level = RiskLevel.MEDIUM
+        level = "MEDIUM"
     else:
-        level = RiskLevel.LOW
+        level = "LOW"
 
     return s, level, flags

@@ -8,9 +8,9 @@ so these tests check what the caller actually receives.
 """
 import pytest
 
-from app.embeddings import knowledge_shield as ks
-from app.governance import entities as ent
-from app.governance import response_inspector as ri
+from detection import knowledge_shield as ks
+from detection import entities as ent
+from detection import response_inspector as ri
 
 
 class FakeDoc:

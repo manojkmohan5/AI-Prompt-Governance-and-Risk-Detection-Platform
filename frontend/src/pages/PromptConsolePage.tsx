@@ -39,7 +39,7 @@ function frameworkColor(tag: string): string {
 
 export default function PromptConsolePage() {
   const [prompt, setPrompt] = useState('')
-  const [model, setModel] = useState('llama-3.3-70b-versatile')
+  const [model, setModel] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<PromptRecord | null>(null)
   const [error, setError] = useState('')
@@ -64,7 +64,7 @@ export default function PromptConsolePage() {
     if (!prompt.trim()) return
     setLoading(true); setError(''); setResult(null)
     try {
-      const res = await promptsApi.submit(prompt, model)
+      const res = await promptsApi.submit(prompt, model || undefined)
       setResult(res.data)
       loadHistory(1)
     } catch (err: unknown) {
@@ -186,10 +186,9 @@ export default function PromptConsolePage() {
         <p className="section-title mb-3">Submit Prompt</p>
         <div className="flex gap-2 mb-3">
           <select className="input max-w-[210px]" aria-label="Model" value={model} onChange={e => setModel(e.target.value)}>
-            <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
-            <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (fastest)</option>
-            <option value="mixtral-8x7b-32768">mixtral-8x7b-32768</option>
-            <option value="gemma2-9b-it">gemma2-9b-it</option>
+            <option value="">Default model</option>
+            <option value="openai/gpt-oss-120b">gpt-oss-120b</option>
+            <option value="openai/gpt-oss-20b">gpt-oss-20b (faster)</option>
           </select>
         </div>
 

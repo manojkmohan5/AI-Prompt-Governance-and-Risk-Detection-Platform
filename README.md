@@ -15,33 +15,53 @@ Semantic similarity is kept as a second, deliberately weaker signal. It only eve
 Nothing that can block or redact a prompt uses a model: identifiers are regex, and document matching is a dictionary lookup. One model does run on every prompt when `sentence-transformers` is installed — MiniLM embeds it for the advisory similarity signal, about 20 ms — but that signal can only warn. NER runs only when documents are indexed, never on prompts: measured on real prompts it finds nothing in lowercase text such as "what is dana reyes salary", whereas the index lookup is case-insensitive.
 
 ```
-User ──► Frontend (React/Vite :5173)
-              │
+User ──► Frontend (nginx; Vite :5173 in development)
+              │  /api/v1
               ▼
-         FastAPI Gateway  /api/v1  (:8001)
-              │
-    ┌─────────┴──────────────────────┐
-    │        Governance Pipeline      │
-    │                                 │
+         Backend (FastAPI :8001)
+              │  HTTP, internal only. Fails closed: if detection
+              │  cannot answer, the request stops with a 503
+              ▼
+    ┌─────────────────────────────────┐
+    │  Detection service (:8002)      │
     │  1. Inspection                  │  Regex entities + injection phrases
     │  2. Knowledge Shield            │  Doc entity index (exact)
     │                                 │  + chunked FAISS (advisory)
     │  3. Risk Scoring                │  Evidence-based points, 0–100
+    └─────────┬──────────────────────┘
+              ▼
+    ┌─────────────────────────────────┐
+    │  Backend                        │
     │  4. Anomaly Detection           │  Z-score per-user baseline
     │  5. Compliance Mapping          │  GDPR · HIPAA · SOC2 · EU AI Act
     │  6. Policy Enforcement          │  ALLOW / WARN / REDACT / BLOCK
     └─────────┬──────────────────────┘
               │  BLOCK stops here · REDACT masks matched spans first
               ▼
-         Groq LLM  (llama-3.3-70b-versatile, or a local mock without a key)
+         Groq LLM  (GROQ_MODEL, or a local mock without a key)
               │
     ┌─────────┴──────────────────────┐
-    │     Response Inspection         │  Entity index on LLM output;
+    │  Detection service              │
+    │  Response Inspection            │  Entity index on LLM output;
     │                                 │  leaked spans masked, not just flagged
     └─────────┬──────────────────────┘
               ▼
-         Audit Log + Analytics Dashboard
+         Audit Log + Analytics Dashboard (backend)
 ```
+
+### Services
+
+Docker Compose runs five containers. Each service owns its data, and only the backend talks to the detection service.
+
+| Container | What it does | Its data |
+|-----------|--------------|----------|
+| `frontend` | nginx: serves the React app and forwards `/api` to the backend | — |
+| `backend` | Login and roles, policy rules, anomaly detection, the Groq call, audit log, dashboards | `governance` database |
+| `detection` | Everything that reads text: regex and injection checks, the document index (NER), similarity (MiniLM + FAISS), risk score, the answer check, upload parsing | `detection` database: the protected documents |
+| `postgres` | One Postgres server, one database per service | `postgres-data` volume |
+| `redis` | Cache for the detection service's similarity search | `redis-data` volume |
+
+If the detection service is down, prompts are refused with a 503 and nothing is sent to the LLM, or returned from it, unchecked. Signing in, dashboards and the audit log keep working.
 
 ### What happens to a prompt
 
@@ -65,16 +85,16 @@ These are real results from an end-to-end run against the seeded sample document
 | Layer | Technology |
 |-------|-----------|
 | Frontend | React 18, TypeScript, Vite, TailwindCSS, Recharts |
-| Backend | FastAPI, Python 3.12, Uvicorn |
-| Database | SQLite (via SQLAlchemy 2.0 async) |
+| Backend | FastAPI, Python 3.12, Uvicorn: two services, backend and detection, calling each other over HTTP/JSON (`httpx`) |
+| Database | PostgreSQL 17 in Docker, a database per service; SQLite when a service runs directly (SQLAlchemy 2.0 async, `asyncpg` / `aiosqlite`) |
 | Entity extraction | Regex (identifiers, Luhn-checked cards) + NER (`dslim/distilbert-NER`, documents only) |
 | Embeddings | SentenceTransformers (`all-MiniLM-L6-v2`) |
 | Vector Search | FAISS (`faiss-cpu`) |
 | Document parsing | `pypdf` (PDF), `python-docx` (Word) |
-| LLM Provider | Groq API (`llama-3.3-70b-versatile`) |
+| LLM Provider | Groq API (default model `openai/gpt-oss-120b`, set with `GROQ_MODEL`) |
 | Auth | JWT (python-jose + bcrypt) |
-| Cache | Redis (optional — Knowledge Shield similarity results) |
-| Deployment | Docker + Docker Compose (backend, frontend/nginx, Redis) |
+| Cache | Redis (optional — similarity results, in the detection service) |
+| Deployment | Docker + Docker Compose (frontend/nginx, backend, detection, Postgres, Redis) |
 
 ---
 
@@ -82,18 +102,30 @@ These are real results from an end-to-end run against the seeded sample document
 
 ```
 AI-Prompt-Governance-and-Risk-Detection-Platform/
-├── backend/
+├── backend/                     # The API: everything but reading text
 │   ├── app/
-│   │   ├── api/v1/endpoints/    # auth, prompts, analytics, policies, audit, knowledge-shield
+│   │   ├── api/v1/endpoints/    # auth, prompts, analytics, policies, audit, knowledge-shield (forwards to detection)
 │   │   ├── core/                # config, database, security
-│   │   ├── governance/          # entities, inspector, risk_scorer, response_inspector
-│   │   ├── embeddings/          # encoder, knowledge_shield (FAISS)
+│   │   ├── governance/          # policy_engine, compliance_mapper
 │   │   ├── models/              # SQLAlchemy ORM models
 │   │   ├── schemas/             # Pydantic request/response schemas
-│   │   └── services/            # prompt_service, document_text, analytics_service, llm_service, anomaly_service
+│   │   └── services/            # prompt_service, detection_client, analytics_service, llm_service, anomaly_service
 │   ├── seed_data/seed.py        # Demo users, prompt history, policy rules, protected docs
-│   ├── tests/                   # pytest: leak detection, uploads, admin-only access, migrations, real models
+│   ├── tests/                   # pytest: access control, policies, migrations, seeding, fail-closed
 │   ├── main.py                  # FastAPI app entry point
+│   ├── Dockerfile               # No ML packages
+│   └── requirements.txt
+├── detection/                   # The detection service: everything that reads text
+│   ├── detection/
+│   │   ├── main.py              # Internal HTTP API: checks, documents, status
+│   │   ├── entities.py          # Regex identifiers + NER
+│   │   ├── inspector.py         # PII, credentials, injection phrases
+│   │   ├── knowledge_shield.py  # Document entity index + FAISS similarity
+│   │   ├── risk_scorer.py       # Evidence-based points
+│   │   ├── response_inspector.py
+│   │   ├── document_text.py     # PDF / Word / text extraction
+│   │   └── encoder.py, cache.py, config.py, database.py, models.py
+│   ├── tests/                   # pytest: leak detection, uploads, the service API, real models
 │   ├── Dockerfile               # Pre-downloads NER + embedding checkpoints into the image
 │   ├── requirements.txt         # Core dependencies
 │   └── requirements-ml.txt      # Optional: NER (name detection) + embeddings (similarity)
@@ -108,8 +140,9 @@ AI-Prompt-Governance-and-Risk-Detection-Platform/
 │   ├── Dockerfile               # Multi-stage build -> nginx
 │   └── nginx.conf               # Serves the SPA, proxies /api to the backend
 ├── sample_documents/            # Fictional client records, one per upload format
-├── .github/workflows/ci.yml     # One pipeline: backend + frontend checks, Docker build, smoke + real-model tests
-├── docker-compose.yml           # Full stack: backend + frontend + Redis
+├── postgres/init/               # Creates the detection service's database
+├── .github/workflows/ci.yml     # One pipeline: both services + frontend checks, Docker builds, smoke + real-model tests
+├── docker-compose.yml           # Full stack: frontend, backend, detection, Postgres, Redis
 ├── .env.example                 # Environment variable template
 └── README.md
 ```
@@ -124,32 +157,45 @@ AI-Prompt-Governance-and-Risk-Detection-Platform/
 - Node 20+
 - Optional: a free [Groq API key](https://console.groq.com). Without one, the LLM step returns a mock response, so the whole governance pipeline can be tested offline and no prompt leaves your machine.
 
-### Backend
+### Detection service
 
 ```bash
-cd backend
+cd detection
 
 # Create and activate a virtual environment
 python -m venv venv
 venv\Scripts\activate          # Windows
 # source venv/bin/activate     # macOS/Linux
 
-# Install dependencies
 pip install -r requirements.txt
 pip install -r requirements-ml.txt   # optional but recommended — see below
+
+uvicorn detection.main:app --port 8002
+```
+
+It needs no configuration to run locally: it keeps its documents in `detection.db` (SQLite) and accepts requests without a token. Start it before the backend.
+
+**Without `requirements-ml.txt`** (roughly 1 GB installed, mostly PyTorch, plus about 350 MB of models downloaded on first use) the shield still blocks leaks of identifiers — SSNs, card numbers, contract and case numbers — but **names of people and companies in documents are not protected**, and the same-topic warning is off. The Knowledge Shield page says which is active.
+
+### Backend
+
+```bash
+cd backend
+python -m venv venv
+venv\Scripts\activate          # Windows
+# source venv/bin/activate     # macOS/Linux
+
+pip install -r requirements.txt
 
 # Configure environment
 cp ../.env.example .env
 # Optionally set GROQ_API_KEY in .env — leave it empty to use the mock LLM
 
-# Seed demo data FIRST, then start the API
-python -m seed_data.seed
+python -m seed_data.seed       # demo users, rules, prompt history and documents
 uvicorn main:app --host 0.0.0.0 --port 8001
 ```
 
-**Seed before starting the server.** The Knowledge Shield indexes documents when the server starts and whenever an admin adds or removes one; rows the seeder writes straight into the database are only picked up on the next start. If you seed while the server is running, restart it.
-
-**Without `requirements-ml.txt`** (roughly 1 GB installed, mostly PyTorch, plus about 350 MB of models downloaded on first use) the shield still blocks leaks of identifiers — SSNs, card numbers, contract and case numbers — but **names of people and companies in documents are not protected**, and the same-topic warning is off. The Knowledge Shield page says which is active.
+The seeder sends the demo documents to the detection service, which indexes them as they arrive, so seeding needs the detection service running and no restart afterwards.
 
 ### Frontend
 
@@ -164,12 +210,15 @@ npm run dev
 
 ```bash
 docker compose up --build
-docker compose exec backend python -m seed_data.seed    # demo users, rules and documents
-docker compose restart backend                          # so the shield indexes the seeded documents
+docker compose exec backend python -m seed_data.seed    # demo users, rules, history and documents
 # Frontend: http://localhost   Backend: http://localhost:8001
 ```
 
-Runs backend + frontend (nginx) + Redis together. The database lives on a named volume (`backend-data`), so seeding is needed once, not per start. The backend image pre-downloads the NER and embedding checkpoints at *build* time, so a cold container doesn't re-fetch ~260MB on first document upload. Put `GROQ_API_KEY` (and optionally `SECRET_KEY`) in a `.env` file at the repo root — `docker-compose.yml` reads it via variable substitution.
+Runs the five containers listed under [Services](#services). Data lives on named volumes (`postgres-data`, `redis-data`), so seeding is needed once, not per start. Postgres, Redis and the detection service are not published to the host, and sit on an internal network with no route out; the frontend is not on it. Put `GROQ_API_KEY` (and optionally `SECRET_KEY`, `POSTGRES_PASSWORD`, `DETECTION_TOKEN`) in a `.env` file at the repo root — `docker-compose.yml` reads it via variable substitution. The Postgres password defaults to `governance` for local use; set `POSTGRES_PASSWORD` before the first `up`, since Postgres stores it when the volume is created.
+
+The detection image pre-downloads the NER and embedding checkpoints at *build* time, so a cold container needs no network and doesn't re-fetch ~260MB on first document upload. The backend image has no ML packages at all.
+
+A `postgres-data` volume created before the detection service existed has no `detection` database. Create it once with `docker compose exec postgres createdb -U governance detection`, then run the seeder again: it adds the demo documents to the detection service even when the rest is already seeded.
 
 ---
 
@@ -256,6 +305,7 @@ Rules are validated when created: a flag rule must name a flag raised before the
 - **Intent is not judged.** "Write ransomware" or "scrape customer PII without triggering the audit log" contain no protected value, so they are allowed; the seeded history shows this.
 - **Names in a prompt count only if they appear in a protected document.** A name that is in no document is not treated as PII.
 - **Scanned PDFs need OCR** before they can be protected.
+- **One detection copy.** Each detection process holds the document index in memory and rebuilds it when documents change through it. Several copies behind a load balancer would each need to notice the others' changes, which is not built yet.
 
 ---
 
@@ -264,6 +314,8 @@ Rules are validated when created: a flag rule must name a flag raised before the
 - **Accounts are created by admins** (`POST /auth/register`); there is no self-registration.
 - **Prompt records are private to their owner.** Records keep the original prompt verbatim, including prompts blocked for carrying confidential data, so employees can read only their own; admins can read all.
 - **Protected documents are admin-only** — list, add, upload, delete and status all refuse employees.
+- **The detection service is internal.** It is not published to the host, it is on a network the frontend container is not on, and it never sees an end user's token: the backend checks the admin role before forwarding a document request. Set `DETECTION_TOKEN` (the same value for both services) wherever other workloads share its network; without it the service accepts unauthenticated requests and logs a warning.
+- **Fails closed.** If the detection service cannot answer, a prompt is refused (503) rather than sent unchecked, and an answer that cannot be checked is withheld.
 - **Signing keys:** a placeholder `SECRET_KEY` from this repository is never used to sign tokens. Set your own in any real deployment.
 - **Errors don't expose internals:** stack traces are returned only when `DEBUG=true`.
 - **Login does not reveal which emails have accounts** — an unknown email takes the same time and gives the same reply as a wrong password.
@@ -274,16 +326,22 @@ Rules are validated when created: a flag rule must name a flag raised before the
 ## Testing
 
 ```bash
-cd backend
-pytest -v
+cd detection && pytest -v
+cd backend && pytest -v       # needs detection/requirements.txt installed too
 ```
 
-- Most tests run offline with the models stubbed out. `tests/test_ml_models.py` runs the real NER and embedding models when `requirements-ml.txt` is installed and is skipped otherwise; CI runs it inside the built Docker image.
-- The round-trip tests in `tests/test_cache.py` need Redis on `localhost:6379`; CI provides one.
-- `python -m pyflakes app main.py tests seed_data conftest.py` is the lint gate CI applies.
+- Most tests run offline with the models stubbed out. `detection/tests/test_ml_models.py` runs the real NER and embedding models when `requirements-ml.txt` is installed and is skipped otherwise; CI runs it inside the built detection image.
+- The backend's `tests/test_seed.py` runs the real detection app in-process, so the seeded history comes from the real checks and a mismatch between what one service sends and the other expects fails it. `tests/test_detection_unavailable.py` checks the platform fails closed.
+- The round-trip tests in `detection/tests/test_cache.py` need Redis on `localhost:6379`; CI provides one.
+- Tests that touch a database get a fresh one from the `db_engine` fixture (`conftest.py`): a SQLite file, or the Postgres named by `TEST_DATABASE_URL`. CI runs the suite both ways. To run it on Postgres locally:
+  ```bash
+  docker run -d --rm --name pg-test -e POSTGRES_USER=governance -e POSTGRES_PASSWORD=governance -e POSTGRES_DB=governance_test -p 5433:5432 postgres:17-alpine
+  TEST_DATABASE_URL=postgresql+asyncpg://governance:governance@localhost:5433/governance_test pytest -q
+  ```
+- `python -m pyflakes app main.py tests seed_data conftest.py` (backend) and `python -m pyflakes detection tests conftest.py` (detection) are the lint gates CI applies.
 - `cd frontend && npm run build` type-checks and builds the frontend.
 
-CI (`.github/workflows/ci.yml`) is one pipeline with one job, **Build and test**, run once on every push. Its steps, in order: backend install, compile check, lint, import check and tests (with a real Redis); frontend install and build; then the Docker images are built and the whole stack is smoke-tested — including a 2MB upload through nginx — and the real-model tests run inside the built image. `main` accepts changes only through a pull request on which Build and test has passed.
+CI (`.github/workflows/ci.yml`) is one pipeline with one job, **Build and test**, run once on every push. Its steps, in order: for the detection service and then the backend, compile check, lint and tests (with a real Redis), then the tests again on Postgres; frontend install and build; then the three images are built and the whole stack is smoke-tested on Postgres — each container's own health check, a 2MB upload through nginx, seeding, a prompt quoting a seeded SSN that must be blocked, and, with the detection service stopped, a prompt that must be refused — and the real-model tests run inside the detection image. `main` accepts changes only through a pull request on which Build and test has passed.
 
 ---
 
@@ -313,25 +371,40 @@ Base URL: `http://localhost:8001/api/v1`
 
 `GET /health` (outside `/api/v1`) is a public liveness check.
 
+The detection service's API is internal; only the backend calls it: `POST /v1/check/prompt`, `POST /v1/check/response`, `GET`/`POST /v1/documents`, `POST /v1/documents/batch`, `POST /v1/documents/upload`, `DELETE /v1/documents/{id}`, `GET /v1/status`, and `GET /health`.
+
 Interactive docs: `http://localhost:8001/api/docs`
 
 ---
 
 ## Environment Variables
 
+Backend:
+
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | SQLite path (default: `sqlite+aiosqlite:///./governance.db`) |
+| `DATABASE_URL` | Database when the backend runs directly (default: SQLite, `sqlite+aiosqlite:///./governance.db`). Any `postgresql+asyncpg://` URL works too. Docker Compose sets it to its own Postgres |
+| `POSTGRES_PASSWORD` | Docker Compose only: the Postgres password (default `governance`, for local use). Letters and digits — it goes into a URL |
 | `SECRET_KEY` | JWT signing secret. The placeholders in this repository are never used: one is replaced with a random key per process, so sign-ins end on restart. Set a real value to keep them |
 | `DEBUG` | Return stack traces in error responses (default: `false`). Never enable in production |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT lifetime (default: 480) |
 | `GROQ_API_KEY` | Optional. Empty means the LLM step returns a mock response and nothing is sent to Groq |
-| `GROQ_MODEL` | Default: `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | The model used unless the console picks another (default: `openai/gpt-oss-120b`). Groq retires models over time; when one goes, change this and restart |
+| `ALLOWED_ORIGINS` | Comma-separated CORS origins (default: `http://localhost:5173,http://localhost:3000`) |
+| `DETECTION_URL` | Where the detection service is (default: `http://localhost:8002`; Docker Compose: `http://detection:8002`) |
+| `DETECTION_TOKEN` | Shared secret, sent as a bearer token. Must match the detection service's. Empty on both means unauthenticated, for local use |
+| `DETECTION_TIMEOUT_SECONDS` | How long a prompt or answer check may take before the request is refused (default: 10) |
+
+Detection service:
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | Its own database (default: SQLite, `sqlite+aiosqlite:///./detection.db`; Docker Compose: the `detection` database on Postgres) |
+| `DETECTION_TOKEN` | See above. When set, every route but `/health` requires it |
 | `KNOWLEDGE_SHIELD_THRESHOLD` | Similarity at which the advisory same-topic warning fires (default: 0.55). Does not affect blocking |
 | `NER_MODEL` | NER model for names in documents (default: `dslim/distilbert-NER`) |
 | `EMBEDDING_MODEL` | SentenceTransformers model for similarity (default: `all-MiniLM-L6-v2`) |
-| `ALLOWED_ORIGINS` | Comma-separated CORS origins (default: `http://localhost:5173,http://localhost:3000`) |
-| `REDIS_URL` | Optional cache for Knowledge Shield similarity (default: `redis://localhost:6379/0`); runs uncached if unreachable |
+| `REDIS_URL` | Optional cache for similarity results (default: `redis://localhost:6379/0`); runs uncached if unreachable |
 | `CACHE_ENABLED` | Set `false` to disable the Redis cache outright (default: `true`) |
 | `CACHE_TTL_SECONDS` | Cache entry lifetime (default: 604800 / 7 days) |
 
@@ -342,7 +415,7 @@ Blocking and warning thresholds are policy rules, not environment variables — 
 ## Future Improvements
 
 - [ ] Semantic judgment for reworded leaks, injection paraphrases and toxicity (evaluating a structured-output model such as TypeSafe Jev)
-- [ ] PostgreSQL migration for multi-tenant production scale
+- [ ] Several detection copies that pick up each other's document changes
 - [ ] Real-time WebSocket event stream
 - [ ] Alembic database migrations
 - [ ] CSV / PDF compliance report export

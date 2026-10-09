@@ -1,4 +1,28 @@
 services:
+  # Not published to the host. The backend and the detection service each have
+  # a database of their own on this server: "governance" and "detection"
+  # (created by postgres/init when the volume is first made). Set
+  # POSTGRES_PASSWORD in .env for anything beyond local use.
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: governance
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-governance}
+      POSTGRES_DB: governance
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Over TCP: on first start the init scripts run on a temporary server
+      # that only listens on a socket, and a socket check passes before the
+      # real server - and the detection database - exist.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U governance -d governance"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+
+  # Cache for the detection service's similarity search.
   redis:
     image: redis:7-alpine
     volumes:
@@ -8,22 +32,43 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    networks: [internal]
+
+  # Reads every prompt and answer for confidential content, and owns the
+  # protected documents. Only the backend calls it: not published, and on a
+  # network the frontend is not on.
+  detection:
+    build: ./detection
+    environment:
+      DATABASE_URL: postgresql+asyncpg://governance:${POSTGRES_PASSWORD:-governance}@postgres:5432/detection
+      REDIS_URL: redis://redis:6379/0
+      DETECTION_TOKEN: ${DETECTION_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [internal]
 
   backend:
     build: ./backend
     ports:
       - "8001:8001"
     environment:
-      DATABASE_URL: sqlite+aiosqlite:////app/data/governance.db
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://governance:${POSTGRES_PASSWORD:-governance}@postgres:5432/governance
       SECRET_KEY: ${SECRET_KEY:-change-this-to-a-long-random-secret-key-in-production}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      DETECTION_URL: http://detection:8002
+      DETECTION_TOKEN: ${DETECTION_TOKEN:-}
       ALLOWED_ORIGINS: http://localhost,http://localhost:5173
-    volumes:
-      - backend-data:/app/data
     depends_on:
-      redis:
+      postgres:
         condition: service_healthy
+      detection:
+        condition: service_healthy
+    # default: reachable by the frontend, and out to Groq. internal: the rest.
+    networks: [default, internal]
 
   frontend:
     build: ./frontend
@@ -33,6 +78,12 @@ services:
       backend:
         condition: service_healthy
 
+networks:
+  # No route out: nothing on it needs the internet. The detection image has
+  # its models baked in.
+  internal:
+    internal: true
+
 volumes:
+  postgres-data:
   redis-data:
-  backend-data:

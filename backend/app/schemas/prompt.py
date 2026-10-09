@@ -10,8 +10,10 @@ from app.models.policy_rule import ActionType, ConditionType
 
 class PromptSubmit(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=10000)
-    model: str = "llama-3.3-70b-versatile"
-    department: Optional[str] = None
+    # Lengths match the columns they are stored in. SQLite ignored them;
+    # Postgres enforces them, so an unchecked value would fail as a 500.
+    model: Optional[str] = Field(None, max_length=100)   # None: the configured GROQ_MODEL
+    department: Optional[str] = Field(None, max_length=100)
 
 
 class PromptResponse(BaseModel):
@@ -73,7 +75,7 @@ class PolicyRuleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
     condition_type: ConditionType
-    condition_value: str = ""
+    condition_value: str = Field("", max_length=500)
     action: ActionType
     priority: int = Field(0, ge=0, le=1000)
     is_active: bool = True
@@ -112,9 +114,9 @@ class AuditLogOut(BaseModel):
 
 
 class ConfidentialDocCreate(BaseModel):
-    name: str
-    content: str
-    category: str = "general"
+    name: str = Field(..., min_length=1, max_length=300)
+    content: str = Field(..., min_length=1)
+    category: str = Field("general", max_length=100)
 
 
 class ConfidentialDocOut(BaseModel):

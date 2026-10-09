@@ -1,6 +1,6 @@
 """
 Seed script – creates initial users, policy rules, confidential docs, and sample prompts.
-Run: python -m seed_data.seed
+Run: python -m seed_data.seed   (the detection service must be running)
 """
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -10,10 +10,10 @@ from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal, Base, engine
 from app.core.security import hash_password
-from app.models.confidential_doc import ConfidentialDocument
 from app.models.policy_rule import ActionType, ConditionType, PolicyRule
 from app.models.user import User, UserRole
 from app.models.audit_log import AuditLog
+from app.services import detection_client
 
 
 USERS = [
@@ -447,11 +447,8 @@ async def _seed_prompt_history(db, users) -> None:
     """
     from sqlalchemy import update
 
-    from app.embeddings import knowledge_shield
     from app.models.risk_event import RiskEvent
     from app.services import llm_service, prompt_service
-
-    await knowledge_shield.initialize()
 
     current = {"answer": ""}
 
@@ -467,7 +464,7 @@ async def _seed_prompt_history(db, users) -> None:
             current["answer"] = sample["response_text"]
             record = await prompt_service.process(
                 prompt_text=sample["prompt_text"], user=user,
-                model="llama-3.3-70b-versatile", department=user.department, db=db,
+                model=None, department=user.department, db=db,
             )
             # Spread the history over the last four weeks, audit trail included.
             created = datetime.now(timezone.utc) - timedelta(
@@ -483,6 +480,17 @@ async def seed():
     print("Creating tables...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # The detection service owns the protected documents and indexes them as
+    # they arrive, in one batch, so the sample prompts below are checked
+    # against them and no restart is needed. Done whether or not this database
+    # is already seeded: one seeded before the service existed still has no
+    # documents there.
+    if await detection_client.list_documents():
+        print("Detection service already has documents; leaving them.")
+    else:
+        print("Seeding confidential documents into the detection service...")
+        await detection_client.add_documents(CONFIDENTIAL_DOCS)
 
     async with AsyncSessionLocal() as db:
         # Check if already seeded
@@ -508,13 +516,6 @@ async def seed():
         print("Seeding policy rules...")
         for p in POLICIES:
             db.add(PolicyRule(**p))
-
-        print("Seeding confidential documents...")
-        for d in CONFIDENTIAL_DOCS:
-            db.add(ConfidentialDocument(**d))
-
-        # The shield indexes documents through its own session, so they must be
-        # committed before the sample prompts are checked against them.
         await db.commit()
 
         print("Seeding sample prompts through the governance pipeline...")

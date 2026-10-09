@@ -12,15 +12,6 @@ _MOCK_RESPONSE = (
     "This is a simulated response for governance demonstration purposes."
 )
 
-# Groq models available (for reference)
-GROQ_MODELS = [
-    "llama-3.3-70b-versatile",   # Best quality, 128k context
-    "llama-3.1-8b-instant",       # Fastest, lowest latency
-    "mixtral-8x7b-32768",         # Strong 32k context window
-    "gemma2-9b-it",               # Efficient, good quality
-]
-
-
 async def complete(prompt: str, model: str | None = None) -> tuple[str, int]:
     """Return (response_text, tokens_used).
 

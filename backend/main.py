@@ -1,18 +1,20 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from fastapi.responses import JSONResponse
+from sqlalchemy import inspect, text
 
 from app.core.config import settings
 from app.core.database import Base, engine
+from app.services.detection_client import DetectionUnavailable
 
 # New columns added in the ML upgrade — added safely via ALTER TABLE
 _NEW_COLUMNS = [
     ("ml_risk_category", "VARCHAR(50)"),
     ("ml_confidence",    "FLOAT"),
     ("compliance_tags",  "JSON"),
-    ("anomaly_detected", "BOOLEAN DEFAULT 0"),
+    ("anomaly_detected", "BOOLEAN DEFAULT FALSE"),
     ("anomaly_z_score",  "FLOAT"),
 ]
 
@@ -52,7 +54,7 @@ async def _migrate_policy_rules(conn) -> None:
     # who deliberately switches one back on is not overridden on next startup.
     placeholders = ", ".join(f":f{i}" for i in range(len(_RETIRED_FLAGS)))
     await conn.execute(text(
-        f"UPDATE policy_rules SET is_active = 0, "
+        f"UPDATE policy_rules SET is_active = FALSE, "
         f"description = :note || COALESCE(description, '') "
         f"WHERE condition_value IN ({placeholders}) "
         f"AND COALESCE(description, '') NOT LIKE 'Retired:%'"
@@ -90,8 +92,10 @@ async def _remove_unloadable_policy_rules(conn) -> None:
 
 async def _migrate():
     async with engine.begin() as conn:
-        result = await conn.execute(text("PRAGMA table_info(prompts)"))
-        existing = {row[1] for row in result.fetchall()}
+        # The inspector, not PRAGMA table_info: that is SQLite-only.
+        existing = await conn.run_sync(
+            lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("prompts")}
+        )
         for col_name, col_type in _NEW_COLUMNS:
             if col_name not in existing:
                 await conn.execute(text(f"ALTER TABLE prompts ADD COLUMN {col_name} {col_type}"))
@@ -107,12 +111,6 @@ async def lifespan(app: FastAPI):
 
     # Apply non-destructive column migrations
     await _migrate()
-
-    # Build the confidential-document entity index. Nothing is fine-tuned at
-    # boot any more; NER runs only over documents already in the database.
-    # Initialize Knowledge Shield
-    from app.embeddings import knowledge_shield
-    await knowledge_shield.initialize()
 
     yield
 
@@ -141,6 +139,17 @@ app.add_middleware(
 
 from app.api.v1.router import router as api_router
 app.include_router(api_router, prefix="/api/v1")
+
+
+@app.exception_handler(DetectionUnavailable)
+async def _detection_unavailable(request: Request, exc: DetectionUnavailable):
+    # Fail closed: the prompt was not sent to the LLM, or its answer was not
+    # delivered, because nothing could check it. Logins and dashboards keep
+    # working; only what needs a check waits for the detection service.
+    return JSONResponse(status_code=503, content={
+        "detail": "The detection service is unavailable, so this request was stopped "
+                  "and nothing unchecked was sent or returned. Try again shortly.",
+    })
 
 
 @app.get("/health")

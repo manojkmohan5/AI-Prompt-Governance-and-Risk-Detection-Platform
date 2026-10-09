@@ -5,37 +5,58 @@ calls the LLM provider.
 The history used to be written by hand. It still carried the removed
 classifier's flags (TOXICITY, ML_HIGH_RISK, ML_SENSITIVE) and made-up
 confidences, so the dashboards opened on detections this system cannot make.
+
+The real detection service runs in-process here, on its own database, so the
+history comes from the same checks a live request gets - and a change to what
+either side sends or expects fails this file.
 """
 import asyncio
+import pathlib
+import sys
 
+import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.core import database
-from app.embeddings import encoder
-from app.embeddings import knowledge_shield as ks
-from app.governance import entities as ent
+from app.core.config import settings
 from app.governance.policy_engine import POLICY_FLAGS
 from app.models.prompt import PromptRecord
-from app.services import llm_service, prompt_service
+from app.services import detection_client, llm_service, prompt_service
 from seed_data import seed as seed_module
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "detection"))
+from detection import database as detection_db, encoder, entities as ent, knowledge_shield as ks
+from detection.main import app as detection_app
 
 RESPONSE_FLAGS = {"RESPONSE_DOC_LEAK", "RESPONSE_PII_LEAK", "RESPONSE_SECRET_LEAK"}
 
 
 @pytest.fixture
-def seeded(tmp_path, monkeypatch):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'seed.db'}")
-    sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    monkeypatch.setattr(seed_module, "engine", engine)
+def seeded(db_engine, tmp_path, monkeypatch):
+    sessions = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(seed_module, "engine", db_engine)
     monkeypatch.setattr(seed_module, "AsyncSessionLocal", sessions)
-    monkeypatch.setattr(database, "AsyncSessionLocal", sessions)     # the shield's own reads
+    monkeypatch.setattr(database, "AsyncSessionLocal", sessions)
+
+    # The detection service, on a database of its own, as in Docker Compose.
+    detection_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'detection.db'}",
+                                           poolclass=NullPool)
+
+    async def _create():
+        async with detection_engine.begin() as conn:
+            await conn.run_sync(detection_db.Base.metadata.create_all)
+    asyncio.run(_create())
+    monkeypatch.setattr(detection_db, "AsyncSessionLocal",
+                        async_sessionmaker(detection_engine, class_=AsyncSession, expire_on_commit=False))
     monkeypatch.setattr(ent, "ner_available", lambda: False)          # offline
     monkeypatch.setattr(encoder, "is_available", lambda: False)
     for name, value in (("_entity_index", {}), ("_doc_names", []), ("_faiss_index", None),
                         ("_chunk_owners", []), ("_initialized", False), ("_max_phrase_words", 1)):
         monkeypatch.setattr(ks, name, value)
+    monkeypatch.setattr(detection_client, "_transport", httpx.ASGITransport(app=detection_app))
 
     provider_calls = []
 
@@ -52,7 +73,7 @@ def seeded(tmp_path, monkeypatch):
             return list((await db.execute(select(PromptRecord))).scalars())
 
     records = asyncio.run(_records())
-    asyncio.run(engine.dispose())
+    asyncio.run(detection_engine.dispose())
     return records, provider_calls
 
 
@@ -92,6 +113,14 @@ def test_seeding_never_calls_the_llm_provider(seeded):
     assert llm_service.complete.__name__ == "_provider"   # and the swap was undone
 
 
+def test_a_prompt_without_a_model_uses_the_configured_one(seeded):
+    # The API schema and the console each pinned a model name of their own,
+    # so GROQ_MODEL was never read - and when Groq retired that model, every
+    # answer became an error until code changed in several places.
+    records, _ = seeded
+    assert {r.model_used for r in records} == {settings.GROQ_MODEL}
+
+
 # ── The recorded primary category is the most severe flag ────────────────────
 @pytest.mark.parametrize("flags, expected", [
     (["PII_DETECTED", "CONFIDENTIAL_DOC_LEAK"], "CONFIDENTIAL_DOC_LEAK"),
@@ -101,3 +130,7 @@ def test_seeding_never_calls_the_llm_provider(seeded):
 ])
 def test_primary_category_is_the_most_severe_flag(flags, expected):
     assert prompt_service.primary_category(flags) == expected
+
+
+def test_the_documents_are_seeded_into_the_detection_service(seeded):
+    assert sorted(ks._doc_names) == sorted(d["name"] for d in seed_module.CONFIDENTIAL_DOCS)
