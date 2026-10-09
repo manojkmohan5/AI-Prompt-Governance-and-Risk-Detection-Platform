@@ -115,6 +115,7 @@ jobs:
           docker run -d --name redis --network governance-ci-net redis:7-alpine
           docker run -d --name backend --network governance-ci-net \
             -e REDIS_URL=redis://redis:6379/0 \
+            --health-interval 2s \
             -p 8001:8001 governance-backend:ci
 
           echo "waiting for backend health..."
@@ -125,6 +126,7 @@ jobs:
           curl -sf http://localhost:8001/health
 
           docker run -d --name frontend --network governance-ci-net \
+            --health-interval 2s \
             -p 8080:80 governance-frontend:ci
 
           echo "waiting for frontend..."
@@ -138,6 +140,19 @@ jobs:
           echo "verifying nginx's /api proxy actually reaches the backend..."
           curl -sf http://localhost:8080/api/docs >/dev/null \
             || (echo "frontend -> backend /api reverse proxy did not work" && exit 1)
+
+          # Each image's own HEALTHCHECK must pass, not just a curl from the
+          # host: the frontend's checked ::1, which nginx does not listen on,
+          # so it ran "unhealthy" while serving pages. Compose waits on these.
+          echo "waiting for the containers' own health checks..."
+          for c in backend frontend; do
+            for _ in $(seq 1 30); do
+              [ "$(docker inspect -f '{{.State.Health.Status}}' $c)" = healthy ] && break
+              sleep 1
+            done
+            [ "$(docker inspect -f '{{.State.Health.Status}}' $c)" = healthy ] \
+              || (echo "$c HEALTHCHECK is failing:" && docker inspect -f '{{json .State.Health}}' $c && exit 1)
+          done
 
           # nginx refuses bodies over 1MB unless configured, which silently broke
           # every document upload over 1MB in this stack. A 2MB upload with no
