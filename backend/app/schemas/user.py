@@ -13,7 +13,7 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=8)
     # An enum, so an unknown role is a 422 instead of a row that breaks logins.
     role: UserRole = UserRole.EMPLOYEE
-    department: Optional[str] = None
+    department: Optional[str] = Field(None, max_length=100)
 
 
 class UserLogin(BaseModel):

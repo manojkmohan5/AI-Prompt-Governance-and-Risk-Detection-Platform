@@ -44,8 +44,8 @@ async def add_document(
 @router.post("/documents/upload", response_model=ConfidentialDocOut, status_code=201)
 async def upload_document(
     file: UploadFile = File(...),
-    name: str | None = Form(None),
-    category: str = Form("general"),
+    name: str | None = Form(None, max_length=300),
+    category: str = Form("general", max_length=100),
     db: AsyncSession = Depends(get_db),
     _=Depends(require_admin),
 ):
