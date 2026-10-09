@@ -11,7 +11,7 @@ would never be indexed and a test built on them would quietly prove nothing.
 
 Upload them through **Knowledge Shield → Add Document** (admin only) to get a
 populated index, then submit prompts and watch what gets caught. They are also
-the fixtures behind `backend/tests/test_document_upload.py`, so regenerating
+the fixtures behind `detection/tests/test_document_upload.py`, so regenerating
 them badly will fail the suite rather than silently weakening detection.
 
 The same content is seeded automatically by `python -m seed_data.seed` — these
