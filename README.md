@@ -66,7 +66,7 @@ These are real results from an end-to-end run against the seeded sample document
 |-------|-----------|
 | Frontend | React 18, TypeScript, Vite, TailwindCSS, Recharts |
 | Backend | FastAPI, Python 3.12, Uvicorn |
-| Database | SQLite (via SQLAlchemy 2.0 async) |
+| Database | PostgreSQL 17 in Docker; SQLite when the backend runs directly (SQLAlchemy 2.0 async, `asyncpg` / `aiosqlite`) |
 | Entity extraction | Regex (identifiers, Luhn-checked cards) + NER (`dslim/distilbert-NER`, documents only) |
 | Embeddings | SentenceTransformers (`all-MiniLM-L6-v2`) |
 | Vector Search | FAISS (`faiss-cpu`) |
@@ -169,7 +169,7 @@ docker compose restart backend                          # so the shield indexes 
 # Frontend: http://localhost   Backend: http://localhost:8001
 ```
 
-Runs backend + frontend (nginx) + Redis together. The database lives on a named volume (`backend-data`), so seeding is needed once, not per start. The backend image pre-downloads the NER and embedding checkpoints at *build* time, so a cold container doesn't re-fetch ~260MB on first document upload. Put `GROQ_API_KEY` (and optionally `SECRET_KEY`) in a `.env` file at the repo root — `docker-compose.yml` reads it via variable substitution.
+Runs Postgres, Redis, the backend and the frontend (nginx) together. The database is Postgres on the named volume `postgres-data`, so seeding is needed once, not per start. Postgres is not published to the host; only the backend reaches it. Its password defaults to `governance` for local use — set `POSTGRES_PASSWORD` in `.env` for anything else, before the first `up` (Postgres stores it when the volume is created). The backend image pre-downloads the NER and embedding checkpoints at *build* time, so a cold container doesn't re-fetch ~260MB on first document upload. Put `GROQ_API_KEY` (and optionally `SECRET_KEY`) in a `.env` file at the repo root — `docker-compose.yml` reads it via variable substitution.
 
 ---
 
@@ -280,10 +280,15 @@ pytest -v
 
 - Most tests run offline with the models stubbed out. `tests/test_ml_models.py` runs the real NER and embedding models when `requirements-ml.txt` is installed and is skipped otherwise; CI runs it inside the built Docker image.
 - The round-trip tests in `tests/test_cache.py` need Redis on `localhost:6379`; CI provides one.
+- Tests that touch a database get a fresh one from the `db_engine` fixture (`conftest.py`): a SQLite file, or the Postgres named by `TEST_DATABASE_URL`. CI runs the suite both ways. To run it on Postgres locally:
+  ```bash
+  docker run -d --rm --name pg-test -e POSTGRES_USER=governance -e POSTGRES_PASSWORD=governance -e POSTGRES_DB=governance_test -p 5433:5432 postgres:17-alpine
+  TEST_DATABASE_URL=postgresql+asyncpg://governance:governance@localhost:5433/governance_test pytest -q
+  ```
 - `python -m pyflakes app main.py tests seed_data conftest.py` is the lint gate CI applies.
 - `cd frontend && npm run build` type-checks and builds the frontend.
 
-CI (`.github/workflows/ci.yml`) is one pipeline with one job, **Build and test**, run once on every push. Its steps, in order: backend install, compile check, lint, import check and tests (with a real Redis); frontend install and build; then the Docker images are built and the whole stack is smoke-tested — including a 2MB upload through nginx — and the real-model tests run inside the built image. `main` accepts changes only through a pull request on which Build and test has passed.
+CI (`.github/workflows/ci.yml`) is one pipeline with one job, **Build and test**, run once on every push. Its steps, in order: backend install, compile check, lint, import check and tests (with a real Redis), then the tests again on Postgres; frontend install and build; then the Docker images are built and the whole stack is smoke-tested on Postgres — each container's own health check, a 2MB upload through nginx, seeding, and a prompt quoting a seeded SSN that must be blocked — and the real-model tests run inside the built image. `main` accepts changes only through a pull request on which Build and test has passed.
 
 ---
 
@@ -321,7 +326,8 @@ Interactive docs: `http://localhost:8001/api/docs`
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | SQLite path (default: `sqlite+aiosqlite:///./governance.db`) |
+| `DATABASE_URL` | Database when the backend runs directly (default: SQLite, `sqlite+aiosqlite:///./governance.db`). Any `postgresql+asyncpg://` URL works too. Docker Compose sets it to its own Postgres |
+| `POSTGRES_PASSWORD` | Docker Compose only: the Postgres password (default `governance`, for local use). Letters and digits — it goes into a URL |
 | `SECRET_KEY` | JWT signing secret. The placeholders in this repository are never used: one is replaced with a random key per process, so sign-ins end on restart. Set a real value to keep them |
 | `DEBUG` | Return stack traces in error responses (default: `false`). Never enable in production |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT lifetime (default: 480) |
@@ -342,7 +348,6 @@ Blocking and warning thresholds are policy rules, not environment variables — 
 ## Future Improvements
 
 - [ ] Semantic judgment for reworded leaks, injection paraphrases and toxicity (evaluating a structured-output model such as TypeSafe Jev)
-- [ ] PostgreSQL migration for multi-tenant production scale
 - [ ] Real-time WebSocket event stream
 - [ ] Alembic database migrations
 - [ ] CSV / PDF compliance report export

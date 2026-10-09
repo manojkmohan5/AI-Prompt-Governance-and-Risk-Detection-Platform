@@ -33,6 +33,20 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 5
+      # For the second test run: the same suite against a real Postgres.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: governance
+          POSTGRES_PASSWORD: governance
+          POSTGRES_DB: governance_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U governance -d governance_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -70,6 +84,16 @@ jobs:
       - name: "Backend: tests"
         working-directory: backend
         run: pytest -v
+
+      # Docker Compose runs Postgres, and it differs from SQLite in ways only a
+      # real run shows: it enforces foreign keys and VARCHAR lengths and
+      # refuses 0/1 for booleans. Every test that touches a database uses the
+      # db_engine fixture (conftest.py), which honours TEST_DATABASE_URL.
+      - name: "Backend: tests on Postgres"
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://governance:governance@localhost:5432/governance_test
+        run: pytest -q
 
       # ── Frontend ───────────────────────────────────────────────────────────
       - uses: actions/setup-node@v4
@@ -113,7 +137,17 @@ jobs:
           docker network create governance-ci-net
 
           docker run -d --name redis --network governance-ci-net redis:7-alpine
+          # The same database Docker Compose runs.
+          docker run -d --name postgres --network governance-ci-net \
+            -e POSTGRES_USER=governance -e POSTGRES_PASSWORD=governance -e POSTGRES_DB=governance \
+            postgres:17-alpine
+          for _ in $(seq 1 30); do
+            docker exec postgres pg_isready -U governance -d governance && break
+            sleep 1
+          done
+
           docker run -d --name backend --network governance-ci-net \
+            -e DATABASE_URL=postgresql+asyncpg://governance:governance@postgres:5432/governance \
             -e REDIS_URL=redis://redis:6379/0 \
             --health-interval 2s \
             -p 8001:8001 governance-backend:ci
@@ -164,6 +198,32 @@ jobs:
           [ "$code" = "401" ] \
             || (echo "expected 401 from the app, got $code - is nginx's body limit back to 1MB?" && exit 1)
 
+          # The whole pipeline on Postgres, in the real image, through nginx:
+          # a prompt quoting a seeded document's SSN must be blocked, and an
+          # ordinary one answered (by the mock LLM - CI has no Groq key).
+          echo "seeding, then sending prompts through nginx..."
+          docker exec backend python -m seed_data.seed
+          docker restart backend    # the index is built at startup, from the seeded documents
+          for _ in $(seq 1 60); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' backend)" = healthy ] && break
+            sleep 2
+          done
+          api=http://localhost:8080/api/v1
+          token=$(curl -sf -X POST "$api/auth/login" -H 'Content-Type: application/json' \
+            -d '{"email":"admin@acme.corp","password":"Admin@1234"}' \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          submit() {
+            curl -sf -X POST "$api/prompts" -H "Authorization: Bearer $token" \
+              -H 'Content-Type: application/json' -d "{\"prompt\": \"$1\"}" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["policy_action"])'
+          }
+          [ "$(submit 'Is SSN 318-44-2205 still on the payroll?')" = BLOCK ] \
+            || (echo "a seeded document's SSN was not blocked" && exit 1)
+          [ "$(submit 'In one sentence, what is a reverse proxy?')" = ALLOW ] \
+            || (echo "an ordinary prompt was not allowed" && exit 1)
+          curl -sf "$api/analytics/overview" -H "Authorization: Bearer $token" >/dev/null
+          curl -sf "$api/audit?username=adm" -H "Authorization: Bearer $token" >/dev/null
+
       # The backend steps above skip the ML packages, and every other test
       # stubs the models off - which is how an NER setting that fragmented
       # names ("P" + "##riya Raghavan") shipped unnoticed. These run the real
@@ -183,3 +243,4 @@ jobs:
           docker logs backend || true
           docker logs frontend || true
           docker logs redis || true
+          docker logs postgres || true

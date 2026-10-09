@@ -1,4 +1,20 @@
 services:
+  # Not published to the host: only the backend reaches it, on the compose
+  # network. Set POSTGRES_PASSWORD in .env for anything beyond local use.
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: governance
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-governance}
+      POSTGRES_DB: governance
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U governance -d governance"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     volumes:
@@ -14,15 +30,15 @@ services:
     ports:
       - "8001:8001"
     environment:
-      DATABASE_URL: sqlite+aiosqlite:////app/data/governance.db
+      DATABASE_URL: postgresql+asyncpg://governance:${POSTGRES_PASSWORD:-governance}@postgres:5432/governance
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:-change-this-to-a-long-random-secret-key-in-production}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
       ALLOWED_ORIGINS: http://localhost,http://localhost:5173
-    volumes:
-      - backend-data:/app/data
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -35,5 +51,5 @@ services:
         condition: service_healthy
 
 volumes:
+  postgres-data:
   redis-data:
-  backend-data:
