@@ -447,6 +447,7 @@ async def _seed_prompt_history(db, users) -> None:
     """
     from sqlalchemy import update
 
+    from app.core import cache
     from app.embeddings import knowledge_shield
     from app.models.risk_event import RiskEvent
     from app.services import llm_service, prompt_service
@@ -478,6 +479,8 @@ async def _seed_prompt_history(db, users) -> None:
                                  .values(created_at=created))
     finally:
         llm_service.complete = real_complete
+        # The similarity checks above opened it; seed() runs under asyncio.run.
+        await cache.close_async_client()
 
 async def seed():
     print("Creating tables...")

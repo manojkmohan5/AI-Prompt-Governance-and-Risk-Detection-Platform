@@ -67,6 +67,22 @@ def _get_async_client():
         return None
 
 
+async def close_async_client() -> None:
+    """Close the async client while its event loop is still running.
+
+    Left to the garbage collector, its connections are closed after
+    asyncio.run() has shut the loop, which prints "Event loop is closed".
+    """
+    global _async_client
+    client, _async_client = _async_client, None
+    if client is None:
+        return
+    try:
+        await client.aclose()
+    except Exception as e:
+        logger.warning("Redis (async) close failed: %s", e)
+
+
 def build_key(namespace: str, text: str, fingerprint: str) -> str:
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     return f"governance:{namespace}:{fingerprint}:{digest}"
