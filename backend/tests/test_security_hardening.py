@@ -14,7 +14,6 @@ from app.api.v1.endpoints import knowledge_shield as ks_routes
 from app.core import config
 from app.core.database import get_db
 from app.models.user import User, UserRole
-from app.services import document_text
 
 
 # ── Stack traces ──────────────────────────────────────────────────────────────
@@ -90,18 +89,24 @@ class _SpyFile:
 
     async def read(self, size=-1):
         self.requested = size
-        return b"x" * (document_text.MAX_UPLOAD_BYTES + 1)
+        return b"x" * (ks_routes.MAX_UPLOAD_BYTES + 1)
 
 
-def test_an_oversized_upload_is_refused_after_reading_only_one_byte_past_the_limit():
+def test_an_oversized_upload_is_refused_after_reading_only_one_byte_past_the_limit(monkeypatch):
     import asyncio
     from fastapi import HTTPException
 
     admin = User(email="a@acme.corp", username="a", hashed_password="x",
                  role=UserRole.ADMIN, is_active=True)
     spy = _SpyFile()
+    forwarded = []
+
+    async def _upload(*args):
+        forwarded.append(args)
+    monkeypatch.setattr(ks_routes.detection_client, "upload_document", _upload)
+
     with pytest.raises(HTTPException) as e:
-        asyncio.run(ks_routes.upload_document(file=spy, name=None, category="general",
-                                              db=None, _=admin))
+        asyncio.run(ks_routes.upload_document(file=spy, name=None, category="general", _=admin))
     assert e.value.status_code == 413
-    assert spy.requested == document_text.MAX_UPLOAD_BYTES + 1   # never the whole file
+    assert spy.requested == ks_routes.MAX_UPLOAD_BYTES + 1   # never the whole file
+    assert forwarded == []                                   # nor passed on to be buffered again

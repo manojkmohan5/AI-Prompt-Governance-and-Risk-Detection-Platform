@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from app.governance import entities as ent
+from detection import entities as ent
 
 # ── Prompt-injection phrase list ───────────────────────────────────────────────
 # Anchored on the instruction-override verbs rather than on any single wording,

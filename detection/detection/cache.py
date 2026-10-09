@@ -1,13 +1,13 @@
 """
 Redis-backed cache for the one remaining expensive forward pass in the
 governance pipeline: the Knowledge Shield similarity search
-(app.embeddings.knowledge_shield). Prompt inspection is regex and dict
+(detection.knowledge_shield). Prompt inspection is regex and dict
 lookups now, which is cheaper to redo than to cache.
 
 Optional by design, same pattern as app/embeddings/encoder.py: if Redis is
 unreachable or the redis package isn't installed, every call here is a no-op
 and callers fall back to running the forward pass uncached rather than
-failing. Redis is never a hard dependency of the app.
+failing. Redis is never a hard dependency of the service.
 
 Cache keys are namespaced with a fingerprint of the underlying index (see
 knowledge_shield_fingerprint) so a Knowledge Shield document change naturally
@@ -17,7 +17,7 @@ unchanged key.
 import hashlib
 import logging
 
-from app.core.config import settings
+from detection.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -142,5 +142,5 @@ async def cache_set_async(key: str, value: str, ttl: int | None = None) -> None:
 
 def knowledge_shield_fingerprint() -> str:
     """Changes whenever the Knowledge Shield document set is (re)built."""
-    from app.embeddings import knowledge_shield
+    from detection import knowledge_shield
     return getattr(knowledge_shield, "_index_version", "none")

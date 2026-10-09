@@ -2,15 +2,19 @@
 Prompt Service — orchestrates the full governance pipeline for each prompt.
 
 Pipeline:
-  1. Inspection       (regex entities + injection phrases — no model)
-  2. Knowledge Shield (document entity index + advisory similarity)
-  3. Risk Scoring     (evidence-based points)
-  4. Anomaly Detection (Z-score per-user baseline)
-  5. Compliance Mapping
-  6. Policy Enforcement
-  7. LLM Call (if not blocked), with leaked spans masked
-  8. Response Inspection, with leaked spans masked
-  9. Persist
+  1. Detection service: inspection (regex entities + injection phrases), the
+     Knowledge Shield (document entity index + advisory similarity) and the
+     risk score, in one call
+  2. Anomaly Detection (Z-score per-user baseline)
+  3. Compliance Mapping
+  4. Policy Enforcement
+  5. LLM Call (if not blocked), with leaked spans masked
+  6. Detection service: the answer is checked, and masked where it leaks
+  7. Persist
+
+Steps 1 and 6 fail closed: if the detection service cannot answer,
+DetectionUnavailable propagates, nothing is persisted, and the caller gets a
+503 - a prompt is never sent, and an answer never delivered, unchecked.
 """
 import time
 from typing import Optional
@@ -18,14 +22,12 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.embeddings import knowledge_shield
-from app.governance import inspector as insp_module
-from app.governance import compliance_mapper, entities as ent, policy_engine, response_inspector, risk_scorer
+from app.governance import compliance_mapper, policy_engine
 from app.models.audit_log import AuditLog
-from app.models.prompt import PolicyAction, PromptRecord
+from app.models.prompt import PolicyAction, PromptRecord, RiskLevel
 from app.models.risk_event import RiskEvent, RiskEventSeverity
 from app.models.user import User
-from app.services import anomaly_service, llm_service
+from app.services import anomaly_service, detection_client, llm_service
 
 
 # Most severe first. The stored "primary category" was flags[0] - whichever
@@ -56,21 +58,12 @@ async def process(
     username = user.username if user else "anonymous"
     dept = department or (user.department if user else None)
 
-    # ── 1. Inspection (regex entities + injection phrases) ────────────────────
-    inspection = insp_module.inspector.inspect(prompt_text)
-
-    # ── 2. Knowledge Shield ───────────────────────────────────────────────────
-    # Runs unconditionally. It used to be gated behind a risk score, which meant
-    # a calmly-worded prompt quoting a document verbatim — the exact thing this
-    # check exists to catch — was never compared against the documents at all.
-    shield = await knowledge_shield.check_prompt(prompt_text)
-    ks_score = shield.similarity
-    doc_matches = shield.matches if shield.confirmed_leak else []
-
-    # ── 3. Risk Scoring ───────────────────────────────────────────────────────
-    risk_score, risk_level, flags = risk_scorer.score(
-        inspection, doc_matches=doc_matches, topic_similar=shield.topic_similar,
-    )
+    # ── 1. Detection: inspection, Knowledge Shield, risk score ────────────────
+    check = await detection_client.check_prompt(prompt_text)
+    risk_score = check["risk_score"]
+    risk_level = RiskLevel(check["risk_level"])
+    flags = list(check["flags"])
+    ks_score = check["similarity"]
 
     # Primary risk category for record storage. There is no model confidence
     # to record: most flags are exact matches, and the one soft signal
@@ -80,19 +73,19 @@ async def process(
     ml_category = primary_category(flags)
     ml_confidence = None
 
-    # ── 4. Anomaly Detection ──────────────────────────────────────────────────
+    # ── 2. Anomaly Detection ──────────────────────────────────────────────────
     is_anomaly, anomaly_z, _baseline_avg = await anomaly_service.check(user, risk_score, db)
     if is_anomaly and "USER_ANOMALY" not in flags:
         flags.append("USER_ANOMALY")
         risk_score = min(risk_score + 10, 100)
 
-    # ── 5. Compliance Mapping ─────────────────────────────────────────────────
+    # ── 3. Compliance Mapping ─────────────────────────────────────────────────
     compliance_tags = compliance_mapper.get_tags(flags)
 
-    # ── 6. Policy Enforcement ─────────────────────────────────────────────────
+    # ── 4. Policy Enforcement ─────────────────────────────────────────────────
     policy_action = await policy_engine.determine_action(risk_score, flags, dept, db)
 
-    # ── 7. LLM Call (if not blocked) ─────────────────────────────────────────
+    # ── 5. LLM Call (if not blocked) ─────────────────────────────────────────
     response_text: Optional[str] = None
     redacted_prompt: Optional[str] = None
     tokens_used = 0
@@ -101,33 +94,24 @@ async def process(
     if not is_blocked:
         send_text = prompt_text
         if policy_action == PolicyAction.REDACT.value:
-            # Mask PII, credentials, and any value traced to a protected
-            # document. Redacting PII alone forwarded API keys and passwords
-            # to the LLM verbatim, and a document's contract dates or party
-            # names with them.
-            spans = [e for e in inspection.entities
-                     if e.type in ent.PII_TYPES or e.type in ent.SECRET_TYPES]
-            spans += [
-                ent.Entity(m.type, m.value, m.start, m.end, "") for m in shield.matches
-            ]
-            redacted_prompt = ent.redact(prompt_text, spans)
+            # PII, credentials and every value traced to a protected document,
+            # masked by the detection service.
+            redacted_prompt = check["redacted_text"]
             send_text = redacted_prompt
 
         response_text, tokens_used = await llm_service.complete(send_text, model)
 
-        # ── 8. Response Inspection ────────────────────────────────────────────
-        # The prompt is not the only way a document leaks: the model can name
-        # protected values in an answer to a prompt that contained none.
-        resp_result = response_inspector.inspect_response(response_text)
-        if resp_result.flags:
-            flags.extend(resp_result.flags)
+        # ── 6. Detection: the answer ──────────────────────────────────────────
+        answer = await detection_client.check_response(response_text)
+        if answer["flags"]:
+            flags.extend(answer["flags"])
             compliance_tags = compliance_mapper.get_tags(flags)
             # Flagging alone would still hand the leaked value to the caller.
-            response_text = response_inspector.redact_response(response_text, resp_result)
+            response_text = answer["redacted_text"]
 
     latency_ms = int((time.monotonic() - t_start) * 1000)
 
-    # ── 9. Persist PromptRecord ───────────────────────────────────────────────
+    # ── 7. Persist PromptRecord ───────────────────────────────────────────────
     record = PromptRecord(
         user_id=user.id if user else None,
         prompt_text=prompt_text,
@@ -153,7 +137,7 @@ async def process(
     db.add(record)
     await db.flush()
 
-    # ── 10. Audit Log ─────────────────────────────────────────────────────────
+    # ── 8. Audit Log ─────────────────────────────────────────────────────────
     audit = AuditLog(
         prompt_id=record.id,
         user_id=user.id if user else None,
@@ -165,12 +149,9 @@ async def process(
             "flags":            flags,
             "is_blocked":       is_blocked,
             "latency_ms":       latency_ms,
-            "entities":         [{"type": e.type, "value": e.value} for e in inspection.entities],
-            "injection_spans":  inspection.injection_spans,
-            "doc_matches":      [
-                {"type": m.type, "value": m.value, "documents": list(m.doc_names or (m.doc_name,))}
-                for m in shield.matches
-            ],
+            "entities":         check["entities"],
+            "injection_spans":  check["injection_spans"],
+            "doc_matches":      check["doc_matches"],
             "shield_similarity": round(ks_score, 4) if ks_score is not None else None,
             "ml_category":      ml_category,
             "anomaly_detected": is_anomaly,
@@ -181,7 +162,7 @@ async def process(
     )
     db.add(audit)
 
-    # ── 11. Risk Events ───────────────────────────────────────────────────────
+    # ── 9. Risk Events ───────────────────────────────────────────────────────
     _severity = {
         "PROMPT_INJECTION":      RiskEventSeverity.CRITICAL,
         "CONFIDENTIAL_DOC_LEAK": RiskEventSeverity.CRITICAL,
@@ -202,11 +183,8 @@ async def process(
                     "risk_score":  risk_score,
                     "username":    username,
                     "ml_category": ml_category,
-                    "documents":   shield.documents,
-                    "doc_matches": [
-                        {"type": m.type, "value": m.value, "documents": list(m.doc_names or (m.doc_name,))}
-                        for m in shield.matches
-                    ],
+                    "documents":   check["documents"],
+                    "doc_matches": check["doc_matches"],
                 },
             ))
 

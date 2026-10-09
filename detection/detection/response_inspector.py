@@ -17,7 +17,7 @@ it is cheap enough to run on every response with no model loaded.
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from app.governance import entities as ent
+from detection import entities as ent, knowledge_shield
 
 # Credentials, plus the financial identifiers that are secrets once they
 # appear in generated text.
@@ -49,10 +49,6 @@ def inspect_response(text: str) -> ResponseInspectionResult:
     if any(e.type in ent.PII_TYPES for e in result.entities):
         result.pii_detected = True
         result.flags.append("RESPONSE_PII_LEAK")
-
-    # Imported here rather than at module scope: knowledge_shield imports the
-    # governance package, and this keeps that dependency one-directional.
-    from app.embeddings import knowledge_shield
 
     result.doc_matches = knowledge_shield.match_entities(text)
     if any(m.conclusive for m in result.doc_matches):

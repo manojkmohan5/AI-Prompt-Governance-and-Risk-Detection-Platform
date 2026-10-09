@@ -268,7 +268,7 @@ def ner_available() -> bool:
     if _ner_available is None:
         try:
             from transformers import pipeline
-            from app.core.config import settings
+            from detection.config import settings
             # "first", not "simple". The model splits uncommon names into
             # word pieces and often tags each piece as the start of a new
             # entity; "simple" keeps those pieces apart, so "Priya Raghavan"

@@ -4,7 +4,7 @@ All imports are lazy so the server starts without ML packages.
 """
 from typing import List, Optional
 
-from app.core.config import settings
+from detection.config import settings
 
 _model = None
 _available = False

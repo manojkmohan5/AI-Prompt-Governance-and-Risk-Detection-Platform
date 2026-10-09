@@ -26,9 +26,9 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from app.core.config import settings
-from app.embeddings import encoder
-from app.governance import entities as ent
+from detection.config import settings
+from detection import encoder
+from detection import entities as ent
 
 # ── Index state ────────────────────────────────────────────────────────────────
 _faiss_index = None
@@ -173,8 +173,8 @@ async def initialize():
     global _entity_index, _max_phrase_words, _ner_used, _chunk_owners
 
     try:
-        from app.core.database import AsyncSessionLocal
-        from app.models.confidential_doc import ConfidentialDocument
+        from detection.database import AsyncSessionLocal
+        from detection.models import ConfidentialDocument
         from sqlalchemy import select
 
         async with AsyncSessionLocal() as db:
@@ -310,7 +310,7 @@ async def check_similarity(prompt_text: str) -> Tuple[Optional[float], Optional[
     if not encoder.is_available():
         return None, None
 
-    from app.core import cache
+    from detection import cache
     key = cache.build_key("kshield", prompt_text, cache.knowledge_shield_fingerprint())
     cached = await cache.cache_get_async(key)
     if cached is not None:

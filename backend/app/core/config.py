@@ -22,25 +22,13 @@ class Settings(BaseSettings):
     # (or GROQ_MODEL in .env) - nothing else names a model.
     GROQ_MODEL: str = "openai/gpt-oss-120b"
 
-    # Blocking and warning thresholds are policy rules in the database, not
-    # settings. This one only sets when the advisory same-topic warning fires.
-    KNOWLEDGE_SHIELD_THRESHOLD: float = 0.55
-
-    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
-
-    # NER model for pulling names and organisations out of uploaded documents.
-    # Runs at document upload only, never per prompt. Optional: if it cannot be
-    # loaded, documents are indexed by regex identifiers alone and the shield
-    # keeps working with reduced name coverage.
-    NER_MODEL: str = "dslim/distilbert-NER"
-
-    # Redis cache for the Knowledge Shield similarity search, the one call left
-    # that runs a transformer forward pass. Optional: if REDIS_URL is
-    # unreachable or the redis package isn't installed, it falls back to
-    # running uncached rather than failing.
-    REDIS_URL: str = "redis://localhost:6379/0"
-    CACHE_ENABLED: bool = True
-    CACHE_TTL_SECONDS: int = 60 * 60 * 24 * 7  # 7 days
+    # The detection service checks every prompt and answer; see
+    # app/services/detection_client.py. If it cannot answer, prompts are
+    # refused (503) rather than sent unchecked. DETECTION_TOKEN must match the
+    # service's own; empty on both means unauthenticated, for local use.
+    DETECTION_URL: str = "http://localhost:8002"
+    DETECTION_TOKEN: str = ""
+    DETECTION_TIMEOUT_SECONDS: float = 10.0
 
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 

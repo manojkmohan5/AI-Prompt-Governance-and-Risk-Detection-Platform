@@ -8,9 +8,9 @@ redacted, because redaction covered personal data only.
 """
 import pytest
 
-from app.governance import entities as ent
-from app.governance import inspector as insp
-from app.governance import response_inspector as ri
+from detection import entities as ent
+from detection import inspector as insp
+from detection import response_inspector as ri
 
 
 def _secrets(text):

@@ -1,11 +1,13 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import inspect, text
 
 from app.core.config import settings
 from app.core.database import Base, engine
+from app.services.detection_client import DetectionUnavailable
 
 # New columns added in the ML upgrade — added safely via ALTER TABLE
 _NEW_COLUMNS = [
@@ -110,12 +112,6 @@ async def lifespan(app: FastAPI):
     # Apply non-destructive column migrations
     await _migrate()
 
-    # Build the confidential-document entity index. Nothing is fine-tuned at
-    # boot any more; NER runs only over documents already in the database.
-    # Initialize Knowledge Shield
-    from app.embeddings import knowledge_shield
-    await knowledge_shield.initialize()
-
     yield
 
     await engine.dispose()
@@ -143,6 +139,17 @@ app.add_middleware(
 
 from app.api.v1.router import router as api_router
 app.include_router(api_router, prefix="/api/v1")
+
+
+@app.exception_handler(DetectionUnavailable)
+async def _detection_unavailable(request: Request, exc: DetectionUnavailable):
+    # Fail closed: the prompt was not sent to the LLM, or its answer was not
+    # delivered, because nothing could check it. Logins and dashboards keep
+    # working; only what needs a check waits for the detection service.
+    return JSONResponse(status_code=503, content={
+        "detail": "The detection service is unavailable, so this request was stopped "
+                  "and nothing unchecked was sent or returned. Try again shortly.",
+    })
 
 
 @app.get("/health")

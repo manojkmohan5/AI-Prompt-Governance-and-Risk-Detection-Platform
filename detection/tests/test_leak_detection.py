@@ -9,9 +9,9 @@ entities into the index directly, since that is exactly what NER would produce.
 """
 import pytest
 
-from app.embeddings import knowledge_shield as ks
-from app.governance import entities as ent
-from app.governance import inspector as insp
+from detection import knowledge_shield as ks
+from detection import entities as ent
+from detection import inspector as insp
 
 
 class FakeDoc:

@@ -18,8 +18,8 @@ import pytest
 
 pytest.importorskip("transformers", reason="ML requirements not installed")
 
-from app.embeddings import knowledge_shield as ks  # noqa: E402
-from app.governance import entities as ent  # noqa: E402
+from detection import knowledge_shield as ks  # noqa: E402
+from detection import entities as ent  # noqa: E402
 
 
 class FakeDoc:
@@ -90,7 +90,7 @@ def test_lowercase_prompt_still_matches(ner, monkeypatch):
 def test_similarity_finds_the_right_document(monkeypatch):
     pytest.importorskip("sentence_transformers", reason="embedding model not installed")
     pytest.importorskip("faiss", reason="faiss not installed")
-    from app.embeddings import encoder
+    from detection import encoder
 
     if not encoder.is_available():
         pytest.fail("sentence-transformers is installed but the encoder did not load.")
