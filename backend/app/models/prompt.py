@@ -35,7 +35,7 @@ class PromptRecord(Base):
     redacted_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     response_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    model_used: Mapped[str] = mapped_column(String(100), default="llama-3.3-70b-versatile")
+    model_used: Mapped[str] = mapped_column(String(100))
     department: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 

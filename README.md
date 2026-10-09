@@ -33,7 +33,7 @@ User ──► Frontend (React/Vite :5173)
     └─────────┬──────────────────────┘
               │  BLOCK stops here · REDACT masks matched spans first
               ▼
-         Groq LLM  (llama-3.3-70b-versatile, or a local mock without a key)
+         Groq LLM  (GROQ_MODEL, or a local mock without a key)
               │
     ┌─────────┴──────────────────────┐
     │     Response Inspection         │  Entity index on LLM output;
@@ -71,7 +71,7 @@ These are real results from an end-to-end run against the seeded sample document
 | Embeddings | SentenceTransformers (`all-MiniLM-L6-v2`) |
 | Vector Search | FAISS (`faiss-cpu`) |
 | Document parsing | `pypdf` (PDF), `python-docx` (Word) |
-| LLM Provider | Groq API (`llama-3.3-70b-versatile`) |
+| LLM Provider | Groq API (default model `openai/gpt-oss-120b`, set with `GROQ_MODEL`) |
 | Auth | JWT (python-jose + bcrypt) |
 | Cache | Redis (optional — Knowledge Shield similarity results) |
 | Deployment | Docker + Docker Compose (backend, frontend/nginx, Redis) |
@@ -326,7 +326,7 @@ Interactive docs: `http://localhost:8001/api/docs`
 | `DEBUG` | Return stack traces in error responses (default: `false`). Never enable in production |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT lifetime (default: 480) |
 | `GROQ_API_KEY` | Optional. Empty means the LLM step returns a mock response and nothing is sent to Groq |
-| `GROQ_MODEL` | Default: `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | The model used unless the console picks another (default: `openai/gpt-oss-120b`). Groq retires models over time; when one goes, change this and restart |
 | `KNOWLEDGE_SHIELD_THRESHOLD` | Similarity at which the advisory same-topic warning fires (default: 0.55). Does not affect blocking |
 | `NER_MODEL` | NER model for names in documents (default: `dslim/distilbert-NER`) |
 | `EMBEDDING_MODEL` | SentenceTransformers model for similarity (default: `all-MiniLM-L6-v2`) |

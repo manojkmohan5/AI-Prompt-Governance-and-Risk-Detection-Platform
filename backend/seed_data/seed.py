@@ -467,7 +467,7 @@ async def _seed_prompt_history(db, users) -> None:
             current["answer"] = sample["response_text"]
             record = await prompt_service.process(
                 prompt_text=sample["prompt_text"], user=user,
-                model="llama-3.3-70b-versatile", department=user.department, db=db,
+                model=None, department=user.department, db=db,
             )
             # Spread the history over the last four weeks, audit trail included.
             created = datetime.now(timezone.utc) - timedelta(

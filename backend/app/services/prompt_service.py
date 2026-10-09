@@ -17,6 +17,7 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.embeddings import knowledge_shield
 from app.governance import inspector as insp_module
 from app.governance import compliance_mapper, entities as ent, policy_engine, response_inspector, risk_scorer
@@ -44,11 +45,13 @@ def primary_category(flags):
 async def process(
     prompt_text: str,
     user: Optional[User],
-    model: str,
+    model: Optional[str],
     department: Optional[str],
     db: AsyncSession,
 ) -> PromptRecord:
     t_start = time.monotonic()
+    # Resolved here so the record names the model that actually answered.
+    model = model or settings.GROQ_MODEL
 
     username = user.username if user else "anonymous"
     dept = department or (user.department if user else None)

@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     # Groq (OpenAI-compatible)
     GROQ_API_KEY: str = ""
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    # The one default model. Groq retires models; when it does, change this
+    # (or GROQ_MODEL in .env) - nothing else names a model.
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
 
     # Blocking and warning thresholds are policy rules in the database, not
     # settings. This one only sets when the advisory same-topic warning fires.

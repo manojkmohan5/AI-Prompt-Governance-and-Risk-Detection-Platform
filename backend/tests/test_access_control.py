@@ -55,7 +55,7 @@ def db(tmp_path, monkeypatch):
             for owner, text in ((JAMES, "Look up SSN 492-83-7291 for payroll"),
                                 (LISA, "Summarise the vendor agreement")):
                 r = PromptRecord(user_id=owner.id, username=owner.username, prompt_text=text,
-                                 policy_action=PolicyAction.BLOCK, is_blocked=True)
+                                 model_used="test-model", policy_action=PolicyAction.BLOCK, is_blocked=True)
                 s.add(r)
                 await s.flush()
                 records[owner.username] = str(r.id)

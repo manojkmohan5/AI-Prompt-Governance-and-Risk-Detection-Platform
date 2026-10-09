@@ -33,7 +33,8 @@ export const authApi = {
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
 export const promptsApi = {
-  submit: (prompt: string, model = 'llama-3.3-70b-versatile', department?: string) =>
+  // No model: the backend uses its configured GROQ_MODEL.
+  submit: (prompt: string, model?: string, department?: string) =>
     api.post('/prompts', { prompt, model, department }),
 
   list: (params: {

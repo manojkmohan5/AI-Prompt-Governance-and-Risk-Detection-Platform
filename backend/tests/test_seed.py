@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core import database
+from app.core.config import settings
 from app.embeddings import encoder
 from app.embeddings import knowledge_shield as ks
 from app.governance import entities as ent
@@ -90,6 +91,14 @@ def test_seeding_never_calls_the_llm_provider(seeded):
     _, provider_calls = seeded
     assert provider_calls == []
     assert llm_service.complete.__name__ == "_provider"   # and the swap was undone
+
+
+def test_a_prompt_without_a_model_uses_the_configured_one(seeded):
+    # The API schema and the console each pinned a model name of their own,
+    # so GROQ_MODEL was never read - and when Groq retired that model, every
+    # answer became an error until code changed in several places.
+    records, _ = seeded
+    assert {r.model_used for r in records} == {settings.GROQ_MODEL}
 
 
 # ── The recorded primary category is the most severe flag ────────────────────

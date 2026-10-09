@@ -10,7 +10,7 @@ from app.models.policy_rule import ActionType, ConditionType
 
 class PromptSubmit(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=10000)
-    model: str = "llama-3.3-70b-versatile"
+    model: Optional[str] = None   # None: the configured GROQ_MODEL
     department: Optional[str] = None
 
 
