@@ -7,14 +7,15 @@ separate connection - so it saw the document set as it was BEFORE the change.
 A freshly uploaded document stayed unprotected until some later upload, delete
 or restart happened to rebuild again; a deleted one stayed protected.
 
-Uses a real on-disk SQLite database and the real get_db. An in-memory database
+Uses a real database (an on-disk SQLite file, or Postgres in CI) and the real
+get_db. An in-memory database
 on a shared connection would hide the bug: the rebuild would see the
 uncommitted row through the same connection.
 """
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import get_current_user
 from app.api.v1.endpoints import knowledge_shield as ks_routes
@@ -31,16 +32,8 @@ PROMPT = "What is the status of contract CT-7731-QX?"
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
-    import asyncio
-
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'shield.db'}")
-    sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-    async def _create():
-        async with engine.begin() as conn:
-            await conn.run_sync(database.Base.metadata.create_all)
-    asyncio.run(_create())
+def client(db_engine, monkeypatch):
+    sessions = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
 
     # Both the request's get_db and the index rebuild open sessions from here.
     monkeypatch.setattr(database, "AsyncSessionLocal", sessions)
@@ -53,8 +46,7 @@ def client(tmp_path, monkeypatch):
     app = FastAPI()
     app.include_router(ks_routes.router)
     app.dependency_overrides[get_current_user] = lambda: ADMIN
-    yield TestClient(app)
-    asyncio.run(engine.dispose())
+    return TestClient(app)
 
 
 def test_an_uploaded_document_is_protected_immediately(client):

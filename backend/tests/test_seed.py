@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core import database
 from app.core.config import settings
@@ -26,10 +26,9 @@ RESPONSE_FLAGS = {"RESPONSE_DOC_LEAK", "RESPONSE_PII_LEAK", "RESPONSE_SECRET_LEA
 
 
 @pytest.fixture
-def seeded(tmp_path, monkeypatch):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'seed.db'}")
-    sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    monkeypatch.setattr(seed_module, "engine", engine)
+def seeded(db_engine, monkeypatch):
+    sessions = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(seed_module, "engine", db_engine)
     monkeypatch.setattr(seed_module, "AsyncSessionLocal", sessions)
     monkeypatch.setattr(database, "AsyncSessionLocal", sessions)     # the shield's own reads
     monkeypatch.setattr(ent, "ner_available", lambda: False)          # offline
@@ -52,9 +51,7 @@ def seeded(tmp_path, monkeypatch):
         async with sessions() as db:
             return list((await db.execute(select(PromptRecord))).scalars())
 
-    records = asyncio.run(_records())
-    asyncio.run(engine.dispose())
-    return records, provider_calls
+    return asyncio.run(_records()), provider_calls
 
 
 def test_every_sample_prompt_is_recorded(seeded):

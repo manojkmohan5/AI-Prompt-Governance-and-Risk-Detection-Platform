@@ -9,8 +9,8 @@ user; the list endpoint filtered, the single-record endpoint did not.
 Account creation used to be public. Anyone who could reach the API could
 enrol themselves and spend the LLM quota through the platform.
 
-Runs through the real routes and dependency chain against an on-disk SQLite
-database; only the caller's identity is set per request.
+Runs through the real routes and dependency chain against a real database
+(SQLite, or Postgres in CI); only the caller's identity is set per request.
 """
 import asyncio
 import uuid
@@ -18,7 +18,7 @@ import uuid
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import get_current_user
 from app.api.v1.endpoints import auth, prompts
@@ -40,18 +40,18 @@ LISA = _user("lisa", UserRole.EMPLOYEE)
 
 
 @pytest.fixture
-def db(tmp_path, monkeypatch):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'access.db'}")
-    sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+def db(db_engine, monkeypatch):
+    sessions = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
     records = {}
 
     async def _setup():
-        async with engine.begin() as conn:
-            await conn.run_sync(database.Base.metadata.create_all)
         async with sessions() as s:
             s.add_all([User(**{c: getattr(u, c) for c in
                                ("id", "email", "username", "hashed_password", "role",
                                 "department", "is_active")}) for u in (ADMIN, JAMES, LISA)])
+            # Users before their prompts: Postgres enforces the foreign key,
+            # and nothing else orders these inserts.
+            await s.flush()
             for owner, text in ((JAMES, "Look up SSN 492-83-7291 for payroll"),
                                 (LISA, "Summarise the vendor agreement")):
                 r = PromptRecord(user_id=owner.id, username=owner.username, prompt_text=text,
@@ -63,8 +63,7 @@ def db(tmp_path, monkeypatch):
 
     asyncio.run(_setup())
     monkeypatch.setattr(database, "AsyncSessionLocal", sessions)
-    yield records
-    asyncio.run(engine.dispose())
+    return records
 
 
 def _client(caller):

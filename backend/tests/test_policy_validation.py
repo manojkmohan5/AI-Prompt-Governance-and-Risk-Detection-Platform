@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import get_current_user
 from app.api.v1.endpoints import policies
@@ -30,22 +30,15 @@ VALID = {"name": "Block leaks", "condition_type": "flag_contains",
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rules.db'}")
-    sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-    async def _create():
-        async with engine.begin() as conn:
-            await conn.run_sync(database.Base.metadata.create_all)
-    asyncio.run(_create())
+def env(db_engine, monkeypatch):
+    sessions = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
     monkeypatch.setattr(database, "AsyncSessionLocal", sessions)
 
     app = FastAPI()
     app.include_router(policies.router)
     app.dependency_overrides[get_current_user] = lambda: ADMIN
     # Server errors as responses, not exceptions: one test asserts the outage's 500.
-    yield TestClient(app, raise_server_exceptions=False), engine, sessions
-    asyncio.run(engine.dispose())
+    return TestClient(app, raise_server_exceptions=False), db_engine, sessions
 
 
 # ── The API refuses rules that could not work ─────────────────────────────────
@@ -99,7 +92,7 @@ def test_startup_removes_a_rule_that_cannot_be_loaded_and_keeps_the_rest(env):
             await conn.execute(text(
                 "INSERT INTO policy_rules (id, name, condition_type, condition_value, action, "
                 "priority, is_active, created_at) VALUES ('00000000000000000000000000000001', "
-                "'typo', 'FLAG_CONTAINS', 'PII_DETECTED', 'BLCOK', 1, 1, '2026-01-01 00:00:00')"))
+                "'typo', 'FLAG_CONTAINS', 'PII_DETECTED', 'BLCOK', 1, TRUE, '2026-01-01 00:00:00')"))
 
     asyncio.run(_run())
     assert client.get("/policies").status_code == 500          # the outage, reproduced
