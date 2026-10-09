@@ -208,17 +208,16 @@ export default function SettingsPage() {
         <h2 className="section-title mb-4">Platform Configuration</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
           {[
-            { label: 'Risk Block Threshold', value: '> 80', desc: 'Score above which BLOCK is enforced' },
-            { label: 'Risk Warn Threshold', value: '> 50', desc: 'Score above which WARN is triggered' },
-            { label: 'Knowledge Shield Threshold', value: '75%', desc: 'Cosine similarity trigger level' },
+            { label: 'Blocking and warning', value: 'Policy rules', desc: 'Set in the table above; the strictest matching action wins' },
+            { label: 'Similarity warning', value: '55%', desc: 'Same-topic warning only; never blocks on its own' },
             { label: 'Embedding Model', value: 'all-MiniLM-L6-v2', desc: 'SentenceTransformers model' },
-            { label: 'LLM Provider', value: 'Groq', desc: 'llama-3.3-70b-versatile (default)' },
-            { label: 'PII Types Monitored', value: 'Email, Phone, SSN, CC, IP', desc: 'Regex-based detection' },
+            { label: 'LLM Provider', value: 'Groq', desc: 'openai/gpt-oss-120b by default (GROQ_MODEL)' },
+            { label: 'Personal data detected', value: 'SSN, card, email, phone, passport, IBAN, names', desc: 'Regex, plus NER for names in documents' },
           ].map(item => (
             <div key={item.label} className="p-3 bg-surface-2 rounded-lg border border-surface-3">
               <p className="text-gray-400 text-xs mb-1">{item.label}</p>
               <p className="text-white font-mono font-medium">{item.value}</p>
-              <p className="text-gray-600 text-xs mt-0.5">{item.desc}</p>
+              <p className="text-gray-400 text-xs mt-0.5">{item.desc}</p>
             </div>
           ))}
         </div>
